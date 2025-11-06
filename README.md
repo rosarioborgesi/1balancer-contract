@@ -1,66 +1,37 @@
-## Foundry
+## 1balancer-contract
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+## Tools
 
-Foundry consists of:
-
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
-
-## Documentation
-
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
+Make sure to install the tools.
 
 ```shell
-$ forge build
+# Install foundry
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
 ```
 
-### Test
+## Tests
 
 ```shell
-$ forge test
+# Make sure to execute foundry command inside the foundry founder
+cd foundry
+
+# Compile
+forge build --via-ir
 ```
 
-### Format
-
 ```shell
-$ forge fmt
-```
+# Make sure to execute foundry command inside the foundry founder
+cd foundry
 
-### Gas Snapshots
+# Set FORK_URL
+FORK_URL= rpc url for testing on fork
 
-```shell
-$ forge snapshot
-```
+# Test exercises
+source .env
 
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
+forge test --fork-url $FORK_URL \
+--match-path test/UniswapV2Swap.test.sol \
+--match-test test_swapExactTokensForTokens \
+-vvv
 ```
