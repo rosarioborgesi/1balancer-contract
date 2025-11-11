@@ -34,25 +34,25 @@ import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeE
 import {IUniswapV2Router02} from "./interfaces/uniswap-v2/IUniswapV2Router02.sol";
 import {IERC20Token} from "./interfaces/IERC20Token.sol";
 
-contract _1Balancer is Ownable, ReentrancyGuard {
+contract Balancer is Ownable, ReentrancyGuard {
     /*
      * Errors
      */
-    error _1Balancer__ExceededMaxSupportedTokens(
+    error Balancer__ExceededMaxSupportedTokens(
         uint256 investmentTokensLength,
         uint256 maxSupportedTokens
     );
-    error _1Balancer__ArrayLengthMismatch(
+    error Balancer__ArrayLengthMismatch(
         uint256 allocationsLength,
         uint256 investmentTokensLength
     );
-    error _1Balancer__AllocationSetToZero();
-    error _1Balancer__TokenNotSupported(address investmentToken);
-    error _1Balancer__AllocationNotEqualTo100Percent(uint256 allocation);
-    error _1Balancer__AllocationNotSet();
-    error _1Balancer__ZeroAmount();
-    error _1Balancer__InputNotWeth();
-    error _1Balancer__MsgValueAmountMismatch(uint256 amount, uint256 msgValue);
+    error Balancer__AllocationSetToZero();
+    error Balancer__TokenNotSupported(address investmentToken);
+    error Balancer__AllocationNotEqualTo100Percent(uint256 allocation);
+    error Balancer__AllocationNotSet();
+    error Balancer__ZeroAmount();
+    error Balancer__InputNotWeth();
+    error Balancer__MsgValueAmountMismatch(uint256 amount, uint256 msgValue);
 
     /*
      * Libraries
@@ -65,6 +65,11 @@ contract _1Balancer is Ownable, ReentrancyGuard {
     struct AllocationPreference {
         address[] investmentTokens; // must be supported
         uint256[] allocations; // must add up to 1e18 (representing 100%)
+    }
+
+    struct UserPortfolio {
+        address[] tokens; // tokens the user currently holds
+        uint256[] balances; // balance of each token
     }
 
     /*
@@ -82,6 +87,8 @@ contract _1Balancer is Ownable, ReentrancyGuard {
         private s_userToAllocationPreference;
     // token -> supported
     mapping(address => bool) private s_tokenToAllowed;
+    // user -> their portfolio holdings
+    mapping(address => UserPortfolio) private s_userToPortfolio;
 
     /*
      * Events
@@ -131,13 +138,13 @@ contract _1Balancer is Ownable, ReentrancyGuard {
             .investmentTokens
             .length;
         if (investmentTokensLength > s_maxSupportedTokens) {
-            revert _1Balancer__ExceededMaxSupportedTokens(
+            revert Balancer__ExceededMaxSupportedTokens(
                 investmentTokensLength,
                 s_maxSupportedTokens
             );
         }
         if (allocationsLength != investmentTokensLength) {
-            revert _1Balancer__ArrayLengthMismatch(
+            revert Balancer__ArrayLengthMismatch(
                 allocationsLength,
                 investmentTokensLength
             );
@@ -145,16 +152,16 @@ contract _1Balancer is Ownable, ReentrancyGuard {
         uint256 total = 0;
         for (uint256 i = 0; i < investmentTokensLength; i++) {
             if (allocationPreference.allocations[i] == 0) {
-                revert _1Balancer__AllocationSetToZero();
+                revert Balancer__AllocationSetToZero();
             }
             address investmentToken = allocationPreference.investmentTokens[i];
             if (!s_tokenToAllowed[investmentToken]) {
-                revert _1Balancer__TokenNotSupported(investmentToken);
+                revert Balancer__TokenNotSupported(investmentToken);
             }
             total += allocationPreference.allocations[i];
         }
         if (total != PERCENTAGE_FACTOR) {
-            revert _1Balancer__AllocationNotEqualTo100Percent(total);
+            revert Balancer__AllocationNotEqualTo100Percent(total);
         }
         s_userToAllocationPreference[msg.sender] = allocationPreference;
 
@@ -178,20 +185,20 @@ contract _1Balancer is Ownable, ReentrancyGuard {
             .allocations
             .length;
         if (allocationsLength == 0) {
-            revert _1Balancer__AllocationNotSet();
+            revert Balancer__AllocationNotSet();
         }
         if (!s_tokenToAllowed[inputToken]) {
-            revert _1Balancer__TokenNotSupported(inputToken);
+            revert Balancer__TokenNotSupported(inputToken);
         }
         if (amount == 0 && msg.value == 0) {
-            revert _1Balancer__ZeroAmount();
+            revert Balancer__ZeroAmount();
         }
         if (msg.value > 0) {
             if (inputToken != i_wethToken) {
-                revert _1Balancer__InputNotWeth();
+                revert Balancer__InputNotWeth();
             }
             if (amount != msg.value) {
-                revert _1Balancer__MsgValueAmountMismatch(amount, msg.value);
+                revert Balancer__MsgValueAmountMismatch(amount, msg.value);
             }
             IERC20Token(inputToken).deposit{value: amount}();
         } else {
@@ -210,17 +217,29 @@ contract _1Balancer is Ownable, ReentrancyGuard {
         path[0] = inputToken;
 
         for (uint256 i = 0; i < pref.investmentTokens.length; i++) {
+            
             path[1] = pref.investmentTokens[i];
             uint256 amountToSwap = (pref.allocations[i] * amount) /
                 PERCENTAGE_FACTOR;
+
+
+            if(pref.investmentTokens[i] == inputToken) {
+                s_userToPortfolio[msg.sender].tokens.push(pref.investmentTokens[i]);
+                s_userToPortfolio[msg.sender].balances.push(amountToSwap);
+                continue;
+            }
 
             uint256[] memory amounts = i_router.swapExactTokensForTokens({
                 amountIn: amountToSwap,
                 amountOutMin: amountOutMin,
                 path: path,
-                to: msg.sender,
+                to: address(this),
                 deadline: block.timestamp
             });
+
+            s_userToPortfolio[msg.sender].tokens.push(pref.investmentTokens[i]);
+            s_userToPortfolio[msg.sender].balances.push(amounts[1]);
+
             emit Swap(
                 msg.sender,
                 inputToken,
@@ -228,6 +247,7 @@ contract _1Balancer is Ownable, ReentrancyGuard {
                 amountToSwap,
                 amounts[1]
             );
+
         }
 
         emit Deposit(msg.sender, inputToken, amount, 0);
@@ -241,11 +261,20 @@ contract _1Balancer is Ownable, ReentrancyGuard {
 
     function addAllowedToken(address token) external onlyOwner {
         s_tokenToAllowed[token] = true;
+        IERC20Token(token).safeIncreaseAllowance(
+            address(i_router),
+            type(uint256).max
+        );
+
         emit InvestmentTokenAdded(token);
     }
 
     function removeAllowedToken(address token) external onlyOwner {
         s_tokenToAllowed[token] = false;
+        IERC20Token(token).safeDecreaseAllowance(
+            address(i_router),
+            type(uint256).max
+        );
         emit InvestmentTokenRemoved(token);
     }
 
@@ -270,5 +299,17 @@ contract _1Balancer is Ownable, ReentrancyGuard {
 
     function getWethTokenAddress() external view returns (address) {
         return i_wethToken;
+    }
+
+    function getUserAllocation(
+        address user
+    ) external view returns (AllocationPreference memory) {
+        return s_userToAllocationPreference[user];
+    }
+
+    function getUserPortfolio(
+        address user
+    ) external view returns (UserPortfolio memory) {
+        return s_userToPortfolio[user];
     }
 }

@@ -30,8 +30,21 @@ FORK_URL= rpc url for testing on fork
 # Test exercises
 source .env
 
+# SWAP WETH -> MKR
 forge test --fork-url $FORK_URL \
---match-path test/UniswapV2Swap.test.sol \
---match-test test_swapExactTokensForTokens \
--vvv
+    --match-path test/UniswapV2Swap.test.sol \
+    --match-test test_swapExactTokensForTokens \
+    -vvv
+
+# SWAP WETH -> USDC
+forge test --fork-url $FORK_URL \
+    --match-path test/SwapWithChainlink.test.sol \
+    --match-test test_swapWethToUsdcWithOraclePrices \
+    -vvv
+
+# SWAP USDC -> WETH	
+forge test --fork-url $FORK_URL \
+    --match-path test/SwapWithChainlink.test.sol \
+    --match-test test_swapUsdcToWethWithOraclePrices \
+    -vvv	
 ```
