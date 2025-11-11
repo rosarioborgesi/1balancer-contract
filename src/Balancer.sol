@@ -103,11 +103,9 @@ contract Balancer is Ownable, ReentrancyGuard {
         uint256 amountIn,
         uint256 amountOut
     );
-    event Deposit(
+    event PortfolioUpdated(
         address indexed user,
-        address indexed inputToken,
-        uint256 amount,
-        uint256 fee
+        UserPortfolio portfolio
     );
 
     /*
@@ -250,7 +248,7 @@ contract Balancer is Ownable, ReentrancyGuard {
 
         }
 
-        emit Deposit(msg.sender, inputToken, amount, 0);
+        emit PortfolioUpdated(msg.sender, s_userToPortfolio[msg.sender]);
     }
 
     function setMaxSupportedTokens(
