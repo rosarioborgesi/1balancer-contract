@@ -52,8 +52,14 @@ contract BalancerForkTest is Test {
 
         Balancer.UserPortfolio memory portfolio = balancer.getUserPortfolio(user);
         console2.log("=== User Portfolio ===");
-        console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals
-        console2.log("USDC balance:", portfolio.balances[1]); // 1737258970 - 6 decimals
+        console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals (0.5 WETH ~ 1,734 USD of value)
+        console2.log("USDC balance:", portfolio.balances[1]); // 1737258970 - 6 decimals (1,737.258970 USDC ~ 1,734 USD of value)
+
+        assertEq(portfolio.tokens.length, 2, "Portfolio tokens length is not 2");
+        assertEq(portfolio.tokens[0], address(weth), "Portfolio token 0 is not WETH");
+        assertEq(portfolio.tokens[1], address(usdc), "Portfolio token 1 is not USDC");
+        assertEq(portfolio.balances[0], 5 * 10 ** 17, "WETH balance is not 500000000000000000");
+        assertGt(portfolio.balances[1], 1 * 1e6, "USDC balance is not greater than 1 USDC");
     }
 
     function testCreatingUserAllocationAndDepositingWeth() public {
@@ -79,11 +85,30 @@ contract BalancerForkTest is Test {
 
         Balancer.UserPortfolio memory portfolio = balancer.getUserPortfolio(user);
         console2.log("=== User Portfolio ===");
-        console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals
-        console2.log("USDC balance:", portfolio.balances[1]); // 1734811332 - 6 decimals
+        console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals (0.5 WETH ~ 1,734 USD of value)
+        console2.log("USDC balance:", portfolio.balances[1]); // 1734811332 - 6 decimals (1,734.811332 USDC ~ 1,734 USD of value)
+
+        assertEq(portfolio.tokens.length, 2, "Portfolio tokens length is not 2");
+        assertEq(portfolio.tokens[0], address(weth), "Portfolio token 0 is not WETH");
+        assertEq(portfolio.tokens[1], address(usdc), "Portfolio token 1 is not USDC");
+        assertEq(portfolio.balances[0], 5 * 10 ** 17, "WETH balance is not 500000000000000000");
+        assertGt(portfolio.balances[1], 1 * 1e6, "USDC balance is not greater than 1 USDC");
     }
 
     function testCreatingUserAllocationAndDepositingUsdc() public {
+        // Mint USDC to the user. Only the master minter can mint USDC.
+        address masterMinter = usdc.masterMinter();
+        vm.prank(masterMinter);
+        usdc.configureMinter(user, type(uint256).max);
+
+        uint256 depositAmount = 10_000 * 1e6; // ~ 10,000 USD of value
+
+        vm.startPrank(user);
+        usdc.mint(user, depositAmount); // Mint 100,000 USDC to the user
+        usdc.approve(address(balancer), depositAmount);
+        vm.stopPrank();
+
+
         address[] memory investmentTokens = new address[](2);
         investmentTokens[0] = address(weth);
         investmentTokens[1] = address(usdc);
@@ -97,16 +122,20 @@ contract BalancerForkTest is Test {
 
         vm.startPrank(user);
 
-        weth.deposit{value: 1 ether}();
-        weth.approve(address(balancer), 1 ether);
-
         balancer.setUserAllocation(allocationPreference);
-        balancer.deposit(address(weth), 1 ether);
+        balancer.deposit(address(usdc), depositAmount);
         vm.stopPrank();
 
         Balancer.UserPortfolio memory portfolio = balancer.getUserPortfolio(user);
         console2.log("=== User Portfolio ===");
-        console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals
-        console2.log("USDC balance:", portfolio.balances[1]); // 1734811332 - 6 decimals
+        console2.log("WETH balance:", portfolio.balances[0]); // 1429502594553796163 - 18 decimals (1.429502594553796163 WETH ~ 5,000 USD of value)
+        console2.log("USDC balance:", portfolio.balances[1]); // 5000000000 - 6 decimals  (5,000 USDC ~ 5,000 USD of value)
+
+
+        assertEq(portfolio.tokens.length, 2, "Portfolio tokens length is not 2");
+        assertEq(portfolio.tokens[0], address(weth), "Portfolio token 0 is not WETH");
+        assertEq(portfolio.tokens[1], address(usdc), "Portfolio token 1 is not USDC");
+        assertGt(portfolio.balances[0], 1 * 1e17, "USDC balance is not greater than 1e17 wei");
+        assertEq(portfolio.balances[1], 5_000 * 1e6, "WETH balance is not greater then 1 USDC");
     }
 }

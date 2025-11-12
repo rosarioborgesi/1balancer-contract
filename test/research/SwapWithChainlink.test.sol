@@ -30,9 +30,7 @@ contract SwapWithChainlinkTest is Test {
         vm.deal(user, STARTING_BALANCE);
     }
 
-    function getPrice() public view returns (uint256) {
-        //uint8 decimals = s_priceFeed.decimals(); // 8
-
+    function getEthUsdRateInWei() public view returns (uint256) {
         (, int256 answer,,,) = s_priceFeed.latestRoundData();
         console2.log("ETH / USD rate", answer); // answer: 329817000000 - 8 decimals
 
@@ -64,7 +62,7 @@ contract SwapWithChainlinkTest is Test {
         path[1] = USDC;
 
         uint256 wethAmountIn = 1 ether;
-        uint256 ethUsdRate = getPrice();
+        uint256 ethUsdRate = getEthUsdRateInWei();
 
         uint256 minAcceptedUsdc = (ethUsdRate - ((ethUsdRate * SLIPPAGE_TOLERANCE) / 100)) / 1e18; // ETH / USD rate - 10%
 
@@ -111,7 +109,7 @@ contract SwapWithChainlinkTest is Test {
         path[0] = USDC;
         path[1] = WETH;
 
-        uint256 ethUsdRate = getPrice();
+        uint256 ethUsdRate = getEthUsdRateInWei();
 
         uint256 usdcAmountIn = ethUsdRate / 1e12; // 3298170000 - 6 decimals
 
