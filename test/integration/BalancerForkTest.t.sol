@@ -15,15 +15,13 @@ contract BalancerForkTest is Test {
     IWETH public constant weth = IWETH(WETH);
     IUSDC public constant usdc = IUSDC(USDC);
 
-    IUniswapV2Router02 public constant router =
-        IUniswapV2Router02(UNISWAP_V2_ROUTER_02);
-    IUniswapV2Pair public constant pair =
-        IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH);
+    IUniswapV2Router02 public constant router = IUniswapV2Router02(UNISWAP_V2_ROUTER_02);
+    IUniswapV2Pair public constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH);
 
     uint256 constant STARTING_BALANCE = 100 ether;
 
     address user = makeAddr("user");
-    
+
     function setUp() public {
         vm.createSelectFork(vm.envString("FORK_URL"));
         vm.deal(user, STARTING_BALANCE);
@@ -43,11 +41,11 @@ contract BalancerForkTest is Test {
         allocations[0] = 5 * 10 ** 17;
         allocations[1] = 5 * 10 ** 17;
 
-        Balancer.AllocationPreference memory allocationPreference = Balancer
-            .AllocationPreference(investmentTokens, allocations);
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
 
         vm.startPrank(user);
-        
+
         balancer.setUserAllocation(allocationPreference);
         balancer.deposit{value: 1 ether}(address(weth), 1 ether);
         vm.stopPrank();
@@ -58,6 +56,57 @@ contract BalancerForkTest is Test {
         console2.log("USDC balance:", portfolio.balances[1]); // 1737258970 - 6 decimals
     }
 
-    /* weth.deposit{value: 1 ether}();
-        weth.approve(address(balancer), 1 ether); */
+    function testCreatingUserAllocationAndDepositingWeth() public {
+        address[] memory investmentTokens = new address[](2);
+        investmentTokens[0] = address(weth);
+        investmentTokens[1] = address(usdc);
+
+        uint256[] memory allocations = new uint256[](2);
+        allocations[0] = 5 * 10 ** 17;
+        allocations[1] = 5 * 10 ** 17;
+
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
+
+        vm.startPrank(user);
+
+        weth.deposit{value: 1 ether}();
+        weth.approve(address(balancer), 1 ether);
+
+        balancer.setUserAllocation(allocationPreference);
+        balancer.deposit(address(weth), 1 ether);
+        vm.stopPrank();
+
+        Balancer.UserPortfolio memory portfolio = balancer.getUserPortfolio(user);
+        console2.log("=== User Portfolio ===");
+        console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals
+        console2.log("USDC balance:", portfolio.balances[1]); // 1734811332 - 6 decimals
+    }
+
+    function testCreatingUserAllocationAndDepositingUsdc() public {
+        address[] memory investmentTokens = new address[](2);
+        investmentTokens[0] = address(weth);
+        investmentTokens[1] = address(usdc);
+
+        uint256[] memory allocations = new uint256[](2);
+        allocations[0] = 5 * 10 ** 17;
+        allocations[1] = 5 * 10 ** 17;
+
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
+
+        vm.startPrank(user);
+
+        weth.deposit{value: 1 ether}();
+        weth.approve(address(balancer), 1 ether);
+
+        balancer.setUserAllocation(allocationPreference);
+        balancer.deposit(address(weth), 1 ether);
+        vm.stopPrank();
+
+        Balancer.UserPortfolio memory portfolio = balancer.getUserPortfolio(user);
+        console2.log("=== User Portfolio ===");
+        console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals
+        console2.log("USDC balance:", portfolio.balances[1]); // 1734811332 - 6 decimals
+    }
 }

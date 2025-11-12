@@ -38,14 +38,8 @@ contract Balancer is Ownable, ReentrancyGuard {
     /*
      * Errors
      */
-    error Balancer__ExceededMaxSupportedTokens(
-        uint256 investmentTokensLength,
-        uint256 maxSupportedTokens
-    );
-    error Balancer__ArrayLengthMismatch(
-        uint256 allocationsLength,
-        uint256 investmentTokensLength
-    );
+    error Balancer__ExceededMaxSupportedTokens(uint256 investmentTokensLength, uint256 maxSupportedTokens);
+    error Balancer__ArrayLengthMismatch(uint256 allocationsLength, uint256 investmentTokensLength);
     error Balancer__AllocationSetToZero();
     error Balancer__TokenNotSupported(address investmentToken);
     error Balancer__AllocationNotEqualTo100Percent(uint256 allocation);
@@ -83,8 +77,7 @@ contract Balancer is Ownable, ReentrancyGuard {
 
     uint8 private s_maxSupportedTokens;
     // user -> allocation preference
-    mapping(address => AllocationPreference)
-        private s_userToAllocationPreference;
+    mapping(address => AllocationPreference) private s_userToAllocationPreference;
     // token -> supported
     mapping(address => bool) private s_tokenToAllowed;
     // user -> their portfolio holdings
@@ -103,19 +96,12 @@ contract Balancer is Ownable, ReentrancyGuard {
         uint256 amountIn,
         uint256 amountOut
     );
-    event PortfolioUpdated(
-        address indexed user,
-        UserPortfolio portfolio
-    );
+    event PortfolioUpdated(address indexed user, UserPortfolio portfolio);
 
     /*
      * Constructor
      */
-    constructor(
-        address wethToken,
-        address router,
-        uint8 maxSupportedTokens
-    ) Ownable(msg.sender) {
+    constructor(address wethToken, address router, uint8 maxSupportedTokens) Ownable(msg.sender) {
         i_wethToken = wethToken;
         i_router = IUniswapV2Router02(router);
         s_maxSupportedTokens = maxSupportedTokens;
@@ -128,24 +114,14 @@ contract Balancer is Ownable, ReentrancyGuard {
      * @dev set the allocation preference for msg.sender
      * @param allocationPreference - the allocation preference for the user
      */
-    function setUserAllocation(
-        AllocationPreference calldata allocationPreference
-    ) external {
+    function setUserAllocation(AllocationPreference calldata allocationPreference) external {
         uint256 allocationsLength = allocationPreference.allocations.length;
-        uint256 investmentTokensLength = allocationPreference
-            .investmentTokens
-            .length;
+        uint256 investmentTokensLength = allocationPreference.investmentTokens.length;
         if (investmentTokensLength > s_maxSupportedTokens) {
-            revert Balancer__ExceededMaxSupportedTokens(
-                investmentTokensLength,
-                s_maxSupportedTokens
-            );
+            revert Balancer__ExceededMaxSupportedTokens(investmentTokensLength, s_maxSupportedTokens);
         }
         if (allocationsLength != investmentTokensLength) {
-            revert Balancer__ArrayLengthMismatch(
-                allocationsLength,
-                investmentTokensLength
-            );
+            revert Balancer__ArrayLengthMismatch(allocationsLength, investmentTokensLength);
         }
         uint256 total = 0;
         for (uint256 i = 0; i < investmentTokensLength; i++) {
@@ -175,13 +151,8 @@ contract Balancer is Ownable, ReentrancyGuard {
      * @param depositToken - the token deposited. The WETH address should be used if depositing native ETH.
      * @param amount - the amount to be deposited (0 if using native matic)
      */
-    function deposit(
-        address inputToken,
-        uint256 amount
-    ) external payable nonReentrant {
-        uint256 allocationsLength = s_userToAllocationPreference[msg.sender]
-            .allocations
-            .length;
+    function deposit(address inputToken, uint256 amount) external payable nonReentrant {
+        uint256 allocationsLength = s_userToAllocationPreference[msg.sender].allocations.length;
         if (allocationsLength == 0) {
             revert Balancer__AllocationNotSet();
         }
@@ -200,28 +171,19 @@ contract Balancer is Ownable, ReentrancyGuard {
             }
             IERC20Token(inputToken).deposit{value: amount}();
         } else {
-            IERC20Token(inputToken).safeTransferFrom(
-                msg.sender,
-                address(this),
-                amount
-            );
+            IERC20Token(inputToken).safeTransferFrom(msg.sender, address(this), amount);
         }
 
-        AllocationPreference memory pref = s_userToAllocationPreference[
-            msg.sender
-        ];
+        AllocationPreference memory pref = s_userToAllocationPreference[msg.sender];
         uint256 amountOutMin = 1;
         address[] memory path = new address[](2);
         path[0] = inputToken;
 
         for (uint256 i = 0; i < pref.investmentTokens.length; i++) {
-            
             path[1] = pref.investmentTokens[i];
-            uint256 amountToSwap = (pref.allocations[i] * amount) /
-                PERCENTAGE_FACTOR;
+            uint256 amountToSwap = (pref.allocations[i] * amount) / PERCENTAGE_FACTOR;
 
-
-            if(pref.investmentTokens[i] == inputToken) {
+            if (pref.investmentTokens[i] == inputToken) {
                 s_userToPortfolio[msg.sender].tokens.push(pref.investmentTokens[i]);
                 s_userToPortfolio[msg.sender].balances.push(amountToSwap);
                 continue;
@@ -238,41 +200,26 @@ contract Balancer is Ownable, ReentrancyGuard {
             s_userToPortfolio[msg.sender].tokens.push(pref.investmentTokens[i]);
             s_userToPortfolio[msg.sender].balances.push(amounts[1]);
 
-            emit Swap(
-                msg.sender,
-                inputToken,
-                pref.investmentTokens[i],
-                amountToSwap,
-                amounts[1]
-            );
-
+            emit Swap(msg.sender, inputToken, pref.investmentTokens[i], amountToSwap, amounts[1]);
         }
 
         emit PortfolioUpdated(msg.sender, s_userToPortfolio[msg.sender]);
     }
 
-    function setMaxSupportedTokens(
-        uint8 maxSupportedTokens
-    ) external onlyOwner {
+    function setMaxSupportedTokens(uint8 maxSupportedTokens) external onlyOwner {
         s_maxSupportedTokens = maxSupportedTokens;
     }
 
     function addAllowedToken(address token) external onlyOwner {
         s_tokenToAllowed[token] = true;
-        IERC20Token(token).safeIncreaseAllowance(
-            address(i_router),
-            type(uint256).max
-        );
+        IERC20Token(token).safeIncreaseAllowance(address(i_router), type(uint256).max);
 
         emit InvestmentTokenAdded(token);
     }
 
     function removeAllowedToken(address token) external onlyOwner {
         s_tokenToAllowed[token] = false;
-        IERC20Token(token).safeDecreaseAllowance(
-            address(i_router),
-            type(uint256).max
-        );
+        IERC20Token(token).safeDecreaseAllowance(address(i_router), type(uint256).max);
         emit InvestmentTokenRemoved(token);
     }
 
@@ -299,15 +246,11 @@ contract Balancer is Ownable, ReentrancyGuard {
         return i_wethToken;
     }
 
-    function getUserAllocation(
-        address user
-    ) external view returns (AllocationPreference memory) {
+    function getUserAllocation(address user) external view returns (AllocationPreference memory) {
         return s_userToAllocationPreference[user];
     }
 
-    function getUserPortfolio(
-        address user
-    ) external view returns (UserPortfolio memory) {
+    function getUserPortfolio(address user) external view returns (UserPortfolio memory) {
         return s_userToPortfolio[user];
     }
 }

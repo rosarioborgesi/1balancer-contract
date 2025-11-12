@@ -3,26 +3,24 @@ pragma solidity ^0.8.30;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import {CHAINLINK_FEED_ETH_USD} from "../src/Constants.sol";
-import {IERC20} from "../src/interfaces/IERC20.sol";
-import {IWETH} from "../src/interfaces/IWETH.sol";
-import {IUSDC} from "../src/interfaces/IUSDC.sol";
-import {IUniswapV2Router02} from "../src/interfaces/uniswap-v2/IUniswapV2Router02.sol";
-import {IUniswapV2Pair} from "../src/interfaces/uniswap-v2/IUniswapV2Pair.sol";
-import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02} from "../src/Constants.sol";
+import {CHAINLINK_FEED_ETH_USD} from "../../src/Constants.sol";
+import {IERC20} from "../../src/interfaces/IERC20.sol";
+import {IWETH} from "../../src/interfaces/IWETH.sol";
+import {IUSDC} from "../../src/interfaces/IUSDC.sol";
+import {IUniswapV2Router02} from "../../src/interfaces/uniswap-v2/IUniswapV2Router02.sol";
+import {IUniswapV2Pair} from "../../src/interfaces/uniswap-v2/IUniswapV2Pair.sol";
+import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02} from "../../src/Constants.sol";
 
 contract SwapWithChainlinkTest is Test {
     AggregatorV3Interface private s_priceFeed;
     IWETH private constant weth = IWETH(WETH);
     IUSDC private constant usdc = IUSDC(USDC);
 
-    IUniswapV2Router02 private constant router =
-        IUniswapV2Router02(UNISWAP_V2_ROUTER_02);
-    IUniswapV2Pair private constant pair =
-        IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH);
+    IUniswapV2Router02 private constant router = IUniswapV2Router02(UNISWAP_V2_ROUTER_02);
+    IUniswapV2Pair private constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH);
 
     address user = makeAddr("user");
-    
+
     uint256 constant STARTING_BALANCE = 100 ether;
 
     uint8 constant SLIPPAGE_TOLERANCE = 10;
@@ -35,7 +33,7 @@ contract SwapWithChainlinkTest is Test {
     function getPrice() public view returns (uint256) {
         //uint8 decimals = s_priceFeed.decimals(); // 8
 
-        (, int256 answer, , , ) = s_priceFeed.latestRoundData();
+        (, int256 answer,,,) = s_priceFeed.latestRoundData();
         console2.log("ETH / USD rate", answer); // answer: 329817000000 - 8 decimals
 
         // ETH/USD rate in 18 decimals
@@ -69,7 +67,7 @@ contract SwapWithChainlinkTest is Test {
         uint256 ethUsdRate = getPrice();
 
         uint256 minAcceptedUsdc = (ethUsdRate - ((ethUsdRate * SLIPPAGE_TOLERANCE) / 100)) / 1e18; // ETH / USD rate - 10%
-        
+
         console2.log("amountOutMin", minAcceptedUsdc);
 
         vm.prank(user);
@@ -103,12 +101,11 @@ contract SwapWithChainlinkTest is Test {
         address masterMinter = usdc.masterMinter();
         vm.prank(masterMinter);
         usdc.configureMinter(user, type(uint256).max);
-        
+
         vm.startPrank(user);
         usdc.mint(user, 100_000 * 1e6); // Mint 100,000 USDC to the user
         usdc.approve(address(router), type(uint256).max);
         vm.stopPrank();
-
 
         address[] memory path = new address[](2);
         path[0] = USDC;
@@ -116,10 +113,10 @@ contract SwapWithChainlinkTest is Test {
 
         uint256 ethUsdRate = getPrice();
 
-        uint256 usdcAmountIn = ethUsdRate / 1e12;  // 3298170000 - 6 decimals
+        uint256 usdcAmountIn = ethUsdRate / 1e12; // 3298170000 - 6 decimals
 
         uint256 minAcceptedWeth = (1 ether - ((1 ether * SLIPPAGE_TOLERANCE) / 100)); // 1 ether - 10%
-        
+
         console2.log("amountOutMin", minAcceptedWeth);
 
         vm.prank(user);

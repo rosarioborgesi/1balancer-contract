@@ -40,15 +40,14 @@ contract BalancerTest is Test {
         allocations[0] = 5 * 10 ** 17;
         allocations[1] = 5 * 10 ** 17;
 
-        Balancer.AllocationPreference memory allocationPreference = Balancer
-            .AllocationPreference(investmentTokens, allocations);
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
 
         vm.startPrank(USER);
         balancer.setUserAllocation(allocationPreference);
         vm.stopPrank();
 
-        Balancer.AllocationPreference memory userAllocation = balancer
-            .getUserAllocation(USER);
+        Balancer.AllocationPreference memory userAllocation = balancer.getUserAllocation(USER);
         assertEq(userAllocation.investmentTokens.length, 2);
         assertEq(userAllocation.investmentTokens[0], address(weth));
         assertEq(userAllocation.investmentTokens[1], address(usdc));
@@ -65,15 +64,12 @@ contract BalancerTest is Test {
         allocations[0] = 5 * 10 ** 17;
         allocations[1] = 6 * 10 ** 17;
 
-        Balancer.AllocationPreference memory allocationPreference = Balancer
-            .AllocationPreference(investmentTokens, allocations);
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
 
         vm.startPrank(USER);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                Balancer.Balancer__AllocationNotEqualTo100Percent.selector,
-                11 * 10 ** 17
-            )
+            abi.encodeWithSelector(Balancer.Balancer__AllocationNotEqualTo100Percent.selector, 11 * 10 ** 17)
         );
         balancer.setUserAllocation(allocationPreference);
         vm.stopPrank();
