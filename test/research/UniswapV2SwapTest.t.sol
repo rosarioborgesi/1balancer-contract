@@ -32,7 +32,7 @@ contract UniswapV2SwapTest is Test {
     }
 
     // Swap all input tokens for as many output tokens as possible
-    function test_swapExactTokensForTokens() public {
+    function testSwapExactTokensForTokens() public {
         address[] memory path = new address[](3);
         path[0] = WETH;
         path[1] = DAI;

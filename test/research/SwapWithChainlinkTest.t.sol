@@ -50,7 +50,7 @@ contract SwapWithChainlinkTest is Test {
         USDC 3273362536
     */
     // Swap all input tokens for as many output tokens as possible
-    function test_swapWethToUsdcWithOraclePrices() public {
+    function testSwapWethToUsdcWithOraclePrices() public {
         // Deposit and approve WETH
         vm.startPrank(user);
         weth.deposit{value: 100 ether}();
@@ -93,7 +93,7 @@ contract SwapWithChainlinkTest is Test {
         USDC 3324417600
         WETH 997702531702557978
     */
-    function test_swapUsdcToWethWithOraclePrices() public {
+    function testSwapUsdcToWethWithOraclePrices() public {
         // Mint USDC to the user. Only the master minter can mint USDC.
         // https://github.com/circlefin/stablecoin-evm/blob/master/doc/tokendesign.md
         address masterMinter = usdc.masterMinter();

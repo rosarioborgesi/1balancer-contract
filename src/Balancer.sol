@@ -33,6 +33,7 @@ import {IWETH} from "./interfaces/IWETH.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IUniswapV2Router02} from "./interfaces/uniswap-v2/IUniswapV2Router02.sol";
 import {IERC20Token} from "./interfaces/IERC20Token.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 contract Balancer is Ownable, ReentrancyGuard {
     /*
@@ -52,6 +53,7 @@ contract Balancer is Ownable, ReentrancyGuard {
      * Libraries
      */
     using SafeERC20 for IERC20Token;
+    using PriceConverter for uint256;
 
     /*
      * Type declarations
@@ -72,8 +74,11 @@ contract Balancer is Ownable, ReentrancyGuard {
     // Represents 100% for allocations
     uint256 private constant PERCENTAGE_FACTOR = 1e18;
     address private immutable i_wethToken;
+    uint256 private immutable i_rebalanceThreshold;
 
     IUniswapV2Router02 private immutable i_router;
+
+    AggregatorV3Interface private immutable i_priceFeed;
 
     uint8 private s_maxSupportedTokens;
     // user -> allocation preference
@@ -82,6 +87,13 @@ contract Balancer is Ownable, ReentrancyGuard {
     mapping(address => bool) private s_tokenToAllowed;
     // user -> their portfolio holdings
     mapping(address => UserPortfolio) private s_userToPortfolio;
+
+    // Dynamic array of monitored users for rebalancing
+    address[] private s_usersToMonitor;
+    // Track if user is already in array for rebalancing
+    mapping(address => bool) private s_isUserToMonitor;
+    // Track user's position in array for rebalancing
+    mapping(address => uint256) private s_userIndexToMonitor;
 
     /*
      * Events
@@ -101,9 +113,17 @@ contract Balancer is Ownable, ReentrancyGuard {
     /*
      * Constructor
      */
-    constructor(address wethToken, address router, uint8 maxSupportedTokens) Ownable(msg.sender) {
+    constructor(
+        address wethToken,
+        address router,
+        address priceFeed,
+        uint256 rebalanceThreshold,
+        uint8 maxSupportedTokens
+    ) Ownable(msg.sender) {
         i_wethToken = wethToken;
         i_router = IUniswapV2Router02(router);
+        i_priceFeed = AggregatorV3Interface(priceFeed);
+        i_rebalanceThreshold = rebalanceThreshold;
         s_maxSupportedTokens = maxSupportedTokens;
     }
 
@@ -142,14 +162,16 @@ contract Balancer is Ownable, ReentrancyGuard {
         emit AllocationSet(msg.sender, allocationPreference);
     }
 
-    /*
-     * @dev deposit an asset and invest it based on the allocation preference set by msg.sender
-     * @dev requires that the user's allocation preference is set
-     * @dev requires that amount is non-zero or msg.value is non-zero
-     * @dev requires that the user has a sufficient balance and allowance (if using an ERC20 token)
-     * @dev deducts the amasa deposit fee
-     * @param depositToken - the token deposited. The WETH address should be used if depositing native ETH.
-     * @param amount - the amount to be deposited (0 if using native matic)
+    /**
+     * @notice Deposit an asset and automatically invest it based on your allocation preference
+     * @dev Requires that the user's allocation preference is set via setUserAllocation()
+     * @dev Supports two deposit methods:
+     *      1. Native ETH: Send ETH with msg.value (contract wraps to WETH automatically)
+     *      2. ERC20 tokens: Pre-approve this contract, then call with amount (msg.value = 0)
+     * @param inputToken The token address to deposit. Use WETH address if depositing native ETH
+     * @param amount The amount to deposit. Must equal msg.value if depositing ETH, otherwise the ERC20 amount
+     * @dev The contract swaps the input token into your portfolio tokens according to your allocation
+     * @dev Portfolio balances are tracked and can be withdrawn later
      */
     function deposit(address inputToken, uint256 amount) external payable nonReentrant {
         uint256 allocationsLength = s_userToAllocationPreference[msg.sender].allocations.length;
@@ -204,6 +226,144 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
 
         emit PortfolioUpdated(msg.sender, s_userToPortfolio[msg.sender]);
+    }
+
+    // Initially: s_usersToMonitor = []
+
+    // Alice calls enableAutoRebalance():
+    // s_usersToMonitor = [0xAlice]
+    // s_userIndex[0xAlice] = 0
+    // s_isMonitored[0xAlice] = true
+
+    // Bob calls enableAutoRebalance():
+    // s_usersToMonitor = [0xAlice, 0xBob]
+    // s_userIndex[0xBob] = 1
+    // s_isMonitored[0xBob] = true
+
+    // Charlie calls enableAutoRebalance():
+    // s_usersToMonitor = [0xAlice, 0xBob, 0xCharlie]
+    // s_userIndex[0xCharlie] = 2
+    // s_isMonitored[0xCharlie] = true
+    /**
+     * @notice Opt into automated portfolio rebalancing
+     * @dev Adds msg.sender to the monitoring list if not already present
+     */
+    function enableAutoRebalance() external {
+        if (!s_isMonitored[msg.sender]) {
+            // Get current array length (will be the new index)
+            s_userIndex[msg.sender] = s_usersToMonitor.length;
+
+            // Add user to array
+            s_usersToMonitor.push(msg.sender); // ← This is where array is set
+
+            // Mark as monitored
+            s_isMonitored[msg.sender] = true;
+
+            emit AutoRebalanceEnabled(msg.sender);
+        }
+    }
+
+    // Before: [Alice, Bob, Charlie, Dave]
+    // Bob calls disableAutoRebalance() (index 1)
+
+    // Step 1: Move Dave (last) to Bob's position
+    // [Alice, Dave, Charlie, Dave]
+
+    // Step 2: Update Dave's index mapping
+    // s_userIndex[Dave] = 1
+
+    // Step 3: Pop last element
+    // [Alice, Dave, Charlie]
+
+    // Final: [Alice, Dave, Charlie]
+    /**
+     * @notice Opt out of automated portfolio rebalancing
+     * @dev Removes msg.sender from monitoring list using swap-and-pop
+     */
+    function disableAutoRebalance() external {
+        if (s_isMonitored[msg.sender]) {
+            uint256 index = s_userIndex[msg.sender];
+            uint256 lastIndex = s_usersToMonitor.length - 1;
+
+            // If not the last element, swap with last element
+            if (index != lastIndex) {
+                address lastUser = s_usersToMonitor[lastIndex];
+                s_usersToMonitor[index] = lastUser; // Move last user to deleted spot
+                s_userIndex[lastUser] = index; // Update moved user's index
+            }
+
+            // Remove last element
+            s_usersToMonitor.pop();
+
+            // Clean up mappings
+            delete s_isMonitored[msg.sender];
+            delete s_userIndex[msg.sender];
+
+            emit AutoRebalanceDisabled(msg.sender);
+        }
+    }
+
+    /**
+     * @dev Check if a user's portfolio has drifted from target allocation
+     * @param user The user to check
+     * @return true if rebalancing is needed
+     */
+    function _needsRebalancing(address user) internal view returns (bool) {
+        UserPortfolio memory portfolio = s_userToPortfolio[user];
+        AllocationPreference memory allocationPreference = s_userToAllocationPreference[user];
+
+        address[] memory tokens = portfolio.tokens;
+        uint256[] balances = portfolio.balances;
+
+        if (portfolio.tokens.length == 0 || allocationPreference.allocations.length == 0) {
+            return false;
+        }
+
+        // Calculate total portfolio value in USD
+        uint256 totalPortfolioValueInUsd = 0;
+        uint256[] tokenValuesInUsd = new uint256[](tokens.length);
+
+        for (uint256 i = 0; i < tokens.length; i++) {
+            if (tokens[i] == i_wethToken) {
+                // WETH
+                tokenBalancesInUsd[i] = balances[i].getConversionRate(i_priceFeed);
+            } else {
+                // USDC
+                tokenBalancesInUsd[i] = balances[i];
+            }
+
+            totalValueUsd += tokenValuesUsd[i];
+        }
+
+        if (totalValueUsd == 0) {
+            return false;
+        }
+
+        // Check if any allocation drifted beyond threshold
+        for (uint256 i = 0; i < tokens.length; i++) {
+            uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
+            uint256 targetAllocation = allocationPreference.allocations[i];
+
+            uint256 drift = currentAllocation > targetAllocation
+                ? currentAllocation - targetAllocation
+                : targetAllocation - currentAllocation;
+
+            // If drift exceeds threshold (e.g., 5%), rebalance needed
+            if (drift > i_rebalanceThreshold) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @dev Rebalance a user's portfolio to match their target allocation
+     */
+    function _rebalanceUser(address user) internal {
+        // Implementation: swap tokens to restore target allocation
+        // This is where you'd implement the actual rebalancing logic
+        emit PortfolioRebalanced(user);
     }
 
     function setMaxSupportedTokens(uint8 maxSupportedTokens) external onlyOwner {

@@ -108,7 +108,6 @@ contract BalancerForkTest is Test {
         usdc.approve(address(balancer), depositAmount);
         vm.stopPrank();
 
-
         address[] memory investmentTokens = new address[](2);
         investmentTokens[0] = address(weth);
         investmentTokens[1] = address(usdc);
@@ -130,7 +129,6 @@ contract BalancerForkTest is Test {
         console2.log("=== User Portfolio ===");
         console2.log("WETH balance:", portfolio.balances[0]); // 1429502594553796163 - 18 decimals (1.429502594553796163 WETH ~ 5,000 USD of value)
         console2.log("USDC balance:", portfolio.balances[1]); // 5000000000 - 6 decimals  (5,000 USDC ~ 5,000 USD of value)
-
 
         assertEq(portfolio.tokens.length, 2, "Portfolio tokens length is not 2");
         assertEq(portfolio.tokens[0], address(weth), "Portfolio token 0 is not WETH");
