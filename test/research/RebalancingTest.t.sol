@@ -8,7 +8,7 @@ import {IWETH} from "../../src/interfaces/IWETH.sol";
 import {IUSDC} from "../../src/interfaces/IUSDC.sol";
 import {IUniswapV2Router02} from "../../src/interfaces/uniswap-v2/IUniswapV2Router02.sol";
 import {IUniswapV2Pair} from "../../src/interfaces/uniswap-v2/IUniswapV2Pair.sol";
-import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02} from "../../src/Constants.sol";
+import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02, CHAINLINK_FEED_ETH_USD} from "../../src/Constants.sol";
 
 contract RebalancingTest is Test {
     AggregatorV3Interface private s_priceFeed;
@@ -24,7 +24,7 @@ contract RebalancingTest is Test {
 
     function setUp() public {
         s_priceFeed = AggregatorV3Interface(CHAINLINK_FEED_ETH_USD);
-        vm.deal(user, STARTING_BALANCE);
+        vm.deal(USER, STARTING_BALANCE);
     }
 
     function getEthUsdRateInWei() public view returns (uint256) {

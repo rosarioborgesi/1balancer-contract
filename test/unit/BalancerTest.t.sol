@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, console2} from "forge-std/Test.sol";
 import {Balancer} from "../../src/Balancer.sol";
 import {IERC20} from "../../src/interfaces/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {WETH, USDC} from "../mocks/Tokens.sol";
+import {CHAINLINK_FEED_ETH_USD} from "../../src/Constants.sol";
+import {stdError} from "forge-std/StdError.sol";
 
 contract BalancerTest is Test {
     Balancer public balancer;
@@ -15,8 +17,10 @@ contract BalancerTest is Test {
         0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2; */
     address public constant ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
     uint8 public constant MAX_SUPPORTED_TOKENS = 2;
+    uint8 public constant REBALANCE_THRESHOLD = 5;
 
     address USER = makeAddr("user");
+    address USER2 = makeAddr("user2");
 
     function setUp() public {
         weth = new WETH();
@@ -25,7 +29,7 @@ contract BalancerTest is Test {
         usdc = new USDC();
         usdc.mint(USER, 10_000 * 10 ** 6);
 
-        balancer = new Balancer(address(weth), ROUTER, MAX_SUPPORTED_TOKENS);
+        balancer = new Balancer(address(weth), ROUTER, CHAINLINK_FEED_ETH_USD, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS);
 
         balancer.addAllowedToken(address(weth));
         balancer.addAllowedToken(address(usdc));
@@ -47,7 +51,7 @@ contract BalancerTest is Test {
         balancer.setUserAllocation(allocationPreference);
         vm.stopPrank();
 
-        Balancer.AllocationPreference memory userAllocation = balancer.getUserAllocation(USER);
+        Balancer.AllocationPreference memory userAllocation = balancer.getUserToAllocationPreference(USER);
         assertEq(userAllocation.investmentTokens.length, 2);
         assertEq(userAllocation.investmentTokens[0], address(weth));
         assertEq(userAllocation.investmentTokens[1], address(usdc));
@@ -74,4 +78,48 @@ contract BalancerTest is Test {
         balancer.setUserAllocation(allocationPreference);
         vm.stopPrank();
     }
+
+    function testAddOneUser() public {
+        vm.prank(USER);
+        balancer.addUser();
+
+        assertEq(balancer.getUsersLength(), 1);
+        assertEq(balancer.getUserAtIndex(0), USER);
+        assertEq(balancer.isUser(USER), true);
+    }
+
+    function testAddTwoUsers() public {
+        vm.prank(USER);
+        balancer.addUser();
+        vm.prank(USER2);
+        balancer.addUser();
+
+        assertEq(balancer.getUsersLength(), 2);
+        assertEq(balancer.getUserAtIndex(0), USER);
+        assertEq(balancer.getUserAtIndex(1), USER2);
+        assertEq(balancer.isUser(USER), true);
+        assertEq(balancer.isUser(USER2), true);
+    }
+
+    function testRemoveUser() public {
+        vm.prank(USER);
+        balancer.addUser();
+        vm.prank(USER2);
+        balancer.addUser();
+
+        vm.prank(USER);
+        balancer.removeUser();
+
+        console2.log("Users length:", balancer.getUsersLength());
+        console2.log("User 0:", balancer.getUserAtIndex(0));
+        console2.log("Address to is user USER:", balancer.isUser(USER));
+        console2.log("Address to is user USER2:", balancer.isUser(USER2));
+
+        assertEq(balancer.getUsersLength(), 1);
+        assertEq(balancer.getUserAtIndex(0), USER2);
+        assertEq(balancer.isUser(USER), false);
+        assertEq(balancer.isUser(USER2), true);
+        
+    }
+    
 }

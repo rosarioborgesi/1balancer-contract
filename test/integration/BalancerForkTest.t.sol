@@ -6,7 +6,7 @@ import {IWETH} from "../../src/interfaces/IWETH.sol";
 import {IUSDC} from "../../src/interfaces/IUSDC.sol";
 import {IUniswapV2Router02} from "../../src/interfaces/uniswap-v2/IUniswapV2Router02.sol";
 import {IUniswapV2Pair} from "../../src/interfaces/uniswap-v2/IUniswapV2Pair.sol";
-import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02} from "../../src/Constants.sol";
+import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02, CHAINLINK_FEED_ETH_USD} from "../../src/Constants.sol";
 import {Balancer} from "../../src/Balancer.sol";
 
 contract BalancerForkTest is Test {
@@ -19,6 +19,7 @@ contract BalancerForkTest is Test {
     IUniswapV2Pair public constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH);
 
     uint256 constant STARTING_BALANCE = 100 ether;
+    uint8 constant REBALANCE_THRESHOLD = 5;
 
     address user = makeAddr("user");
 
@@ -26,7 +27,7 @@ contract BalancerForkTest is Test {
         vm.createSelectFork(vm.envString("FORK_URL"));
         vm.deal(user, STARTING_BALANCE);
 
-        balancer = new Balancer(address(weth), address(router), 2);
+        balancer = new Balancer(address(weth), address(router), CHAINLINK_FEED_ETH_USD, REBALANCE_THRESHOLD, 2);
 
         balancer.addAllowedToken(address(weth));
         balancer.addAllowedToken(address(usdc));
@@ -50,7 +51,7 @@ contract BalancerForkTest is Test {
         balancer.deposit{value: 1 ether}(address(weth), 1 ether);
         vm.stopPrank();
 
-        Balancer.UserPortfolio memory portfolio = balancer.getUserPortfolio(user);
+        Balancer.UserPortfolio memory portfolio = balancer.getUserToPortfolio(user);
         console2.log("=== User Portfolio ===");
         console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals (0.5 WETH ~ 1,734 USD of value)
         console2.log("USDC balance:", portfolio.balances[1]); // 1737258970 - 6 decimals (1,737.258970 USDC ~ 1,734 USD of value)
@@ -83,7 +84,7 @@ contract BalancerForkTest is Test {
         balancer.deposit(address(weth), 1 ether);
         vm.stopPrank();
 
-        Balancer.UserPortfolio memory portfolio = balancer.getUserPortfolio(user);
+        Balancer.UserPortfolio memory portfolio = balancer.getUserToPortfolio(user);
         console2.log("=== User Portfolio ===");
         console2.log("WETH balance:", portfolio.balances[0]); // 500000000000000000 - 18 decimals (0.5 WETH ~ 1,734 USD of value)
         console2.log("USDC balance:", portfolio.balances[1]); // 1734811332 - 6 decimals (1,734.811332 USDC ~ 1,734 USD of value)
@@ -125,7 +126,7 @@ contract BalancerForkTest is Test {
         balancer.deposit(address(usdc), depositAmount);
         vm.stopPrank();
 
-        Balancer.UserPortfolio memory portfolio = balancer.getUserPortfolio(user);
+        Balancer.UserPortfolio memory portfolio = balancer.getUserToPortfolio(user);
         console2.log("=== User Portfolio ===");
         console2.log("WETH balance:", portfolio.balances[0]); // 1429502594553796163 - 18 decimals (1.429502594553796163 WETH ~ 5,000 USD of value)
         console2.log("USDC balance:", portfolio.balances[1]); // 5000000000 - 6 decimals  (5,000 USDC ~ 5,000 USD of value)

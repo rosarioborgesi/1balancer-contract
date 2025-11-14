@@ -32,19 +32,19 @@ source .env
 
 # SWAP WETH -> MKR
 forge test --fork-url $FORK_URL \
-    --match-path test/UniswapV2Swap.test.sol \
-    --match-test test_swapExactTokensForTokens \
+    --match-path test/research/UniswapV2SwapTest.t.sol \
+    --match-test testSwapExactTokensForTokens \
     -vvv
 
 # SWAP WETH -> USDC
 forge test --fork-url $FORK_URL \
-    --match-path test/SwapWithChainlink.test.sol \
-    --match-test test_swapWethToUsdcWithOraclePrices \
+    --match-path test/research/SwapWithChainlinkTest.t.sol \
+    --match-test testSwapWethToUsdcWithOraclePrices \
     -vvv
 
 # SWAP USDC -> WETH	
 forge test --fork-url $FORK_URL \
-    --match-path test/SwapWithChainlink.test.sol \
-    --match-test test_swapUsdcToWethWithOraclePrices \
+    --match-path test/research/SwapWithChainlinkTest.t.sol \
+    --match-test testSwapUsdcToWethWithOraclePrices\
     -vvv	
 ```

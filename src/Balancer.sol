@@ -34,13 +34,21 @@ import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeE
 import {IUniswapV2Router02} from "./interfaces/uniswap-v2/IUniswapV2Router02.sol";
 import {IERC20Token} from "./interfaces/IERC20Token.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {PriceConverter} from "./PriceConverter.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract Balancer is Ownable, ReentrancyGuard {
     /*
      * Errors
      */
-    error Balancer__ExceededMaxSupportedTokens(uint256 investmentTokensLength, uint256 maxSupportedTokens);
-    error Balancer__ArrayLengthMismatch(uint256 allocationsLength, uint256 investmentTokensLength);
+    error Balancer__ExceededMaxSupportedTokens(
+        uint256 investmentTokensLength,
+        uint256 maxSupportedTokens
+    );
+    error Balancer__ArrayLengthMismatch(
+        uint256 allocationsLength,
+        uint256 investmentTokensLength
+    );
     error Balancer__AllocationSetToZero();
     error Balancer__TokenNotSupported(address investmentToken);
     error Balancer__AllocationNotEqualTo100Percent(uint256 allocation);
@@ -54,6 +62,7 @@ contract Balancer is Ownable, ReentrancyGuard {
      */
     using SafeERC20 for IERC20Token;
     using PriceConverter for uint256;
+    using EnumerableSet for EnumerableSet.AddressSet;
 
     /*
      * Type declarations
@@ -74,7 +83,7 @@ contract Balancer is Ownable, ReentrancyGuard {
     // Represents 100% for allocations
     uint256 private constant PERCENTAGE_FACTOR = 1e18;
     address private immutable i_wethToken;
-    uint256 private immutable i_rebalanceThreshold;
+    uint8 private immutable i_rebalanceThreshold;
 
     IUniswapV2Router02 private immutable i_router;
 
@@ -82,18 +91,14 @@ contract Balancer is Ownable, ReentrancyGuard {
 
     uint8 private s_maxSupportedTokens;
     // user -> allocation preference
-    mapping(address => AllocationPreference) private s_userToAllocationPreference;
+    mapping(address => AllocationPreference)
+        private s_userToAllocationPreference;
     // token -> supported
     mapping(address => bool) private s_tokenToAllowed;
     // user -> their portfolio holdings
     mapping(address => UserPortfolio) private s_userToPortfolio;
 
-    // Dynamic array of monitored users for rebalancing
-    address[] private s_usersToMonitor;
-    // Track if user is already in array for rebalancing
-    mapping(address => bool) private s_isUserToMonitor;
-    // Track user's position in array for rebalancing
-    mapping(address => uint256) private s_userIndexToMonitor;
+    EnumerableSet.AddressSet private s_users;
 
     /*
      * Events
@@ -109,6 +114,8 @@ contract Balancer is Ownable, ReentrancyGuard {
         uint256 amountOut
     );
     event PortfolioUpdated(address indexed user, UserPortfolio portfolio);
+    event UserAdded(address indexed user);
+    event UserRemoved(address indexed user);
 
     /*
      * Constructor
@@ -117,7 +124,7 @@ contract Balancer is Ownable, ReentrancyGuard {
         address wethToken,
         address router,
         address priceFeed,
-        uint256 rebalanceThreshold,
+        uint8 rebalanceThreshold,
         uint8 maxSupportedTokens
     ) Ownable(msg.sender) {
         i_wethToken = wethToken;
@@ -134,14 +141,24 @@ contract Balancer is Ownable, ReentrancyGuard {
      * @dev set the allocation preference for msg.sender
      * @param allocationPreference - the allocation preference for the user
      */
-    function setUserAllocation(AllocationPreference calldata allocationPreference) external {
+    function setUserAllocation(
+        AllocationPreference calldata allocationPreference
+    ) external {
         uint256 allocationsLength = allocationPreference.allocations.length;
-        uint256 investmentTokensLength = allocationPreference.investmentTokens.length;
+        uint256 investmentTokensLength = allocationPreference
+            .investmentTokens
+            .length;
         if (investmentTokensLength > s_maxSupportedTokens) {
-            revert Balancer__ExceededMaxSupportedTokens(investmentTokensLength, s_maxSupportedTokens);
+            revert Balancer__ExceededMaxSupportedTokens(
+                investmentTokensLength,
+                s_maxSupportedTokens
+            );
         }
         if (allocationsLength != investmentTokensLength) {
-            revert Balancer__ArrayLengthMismatch(allocationsLength, investmentTokensLength);
+            revert Balancer__ArrayLengthMismatch(
+                allocationsLength,
+                investmentTokensLength
+            );
         }
         uint256 total = 0;
         for (uint256 i = 0; i < investmentTokensLength; i++) {
@@ -173,8 +190,13 @@ contract Balancer is Ownable, ReentrancyGuard {
      * @dev The contract swaps the input token into your portfolio tokens according to your allocation
      * @dev Portfolio balances are tracked and can be withdrawn later
      */
-    function deposit(address inputToken, uint256 amount) external payable nonReentrant {
-        uint256 allocationsLength = s_userToAllocationPreference[msg.sender].allocations.length;
+    function deposit(
+        address inputToken,
+        uint256 amount
+    ) external payable nonReentrant {
+        uint256 allocationsLength = s_userToAllocationPreference[msg.sender]
+            .allocations
+            .length;
         if (allocationsLength == 0) {
             revert Balancer__AllocationNotSet();
         }
@@ -193,20 +215,29 @@ contract Balancer is Ownable, ReentrancyGuard {
             }
             IERC20Token(inputToken).deposit{value: amount}();
         } else {
-            IERC20Token(inputToken).safeTransferFrom(msg.sender, address(this), amount);
+            IERC20Token(inputToken).safeTransferFrom(
+                msg.sender,
+                address(this),
+                amount
+            );
         }
 
-        AllocationPreference memory pref = s_userToAllocationPreference[msg.sender];
+        AllocationPreference memory pref = s_userToAllocationPreference[
+            msg.sender
+        ];
         uint256 amountOutMin = 1;
         address[] memory path = new address[](2);
         path[0] = inputToken;
 
         for (uint256 i = 0; i < pref.investmentTokens.length; i++) {
             path[1] = pref.investmentTokens[i];
-            uint256 amountToSwap = (pref.allocations[i] * amount) / PERCENTAGE_FACTOR;
+            uint256 amountToSwap = (pref.allocations[i] * amount) /
+                PERCENTAGE_FACTOR;
 
             if (pref.investmentTokens[i] == inputToken) {
-                s_userToPortfolio[msg.sender].tokens.push(pref.investmentTokens[i]);
+                s_userToPortfolio[msg.sender].tokens.push(
+                    pref.investmentTokens[i]
+                );
                 s_userToPortfolio[msg.sender].balances.push(amountToSwap);
                 continue;
             }
@@ -222,85 +253,42 @@ contract Balancer is Ownable, ReentrancyGuard {
             s_userToPortfolio[msg.sender].tokens.push(pref.investmentTokens[i]);
             s_userToPortfolio[msg.sender].balances.push(amounts[1]);
 
-            emit Swap(msg.sender, inputToken, pref.investmentTokens[i], amountToSwap, amounts[1]);
+            emit Swap(
+                msg.sender,
+                inputToken,
+                pref.investmentTokens[i],
+                amountToSwap,
+                amounts[1]
+            );
         }
+
+        _addUser(msg.sender);
 
         emit PortfolioUpdated(msg.sender, s_userToPortfolio[msg.sender]);
     }
 
-    // Initially: s_usersToMonitor = []
-
-    // Alice calls enableAutoRebalance():
-    // s_usersToMonitor = [0xAlice]
-    // s_userIndex[0xAlice] = 0
-    // s_isMonitored[0xAlice] = true
-
-    // Bob calls enableAutoRebalance():
-    // s_usersToMonitor = [0xAlice, 0xBob]
-    // s_userIndex[0xBob] = 1
-    // s_isMonitored[0xBob] = true
-
-    // Charlie calls enableAutoRebalance():
-    // s_usersToMonitor = [0xAlice, 0xBob, 0xCharlie]
-    // s_userIndex[0xCharlie] = 2
-    // s_isMonitored[0xCharlie] = true
-    /**
-     * @notice Opt into automated portfolio rebalancing
-     * @dev Adds msg.sender to the monitoring list if not already present
-     */
-    function enableAutoRebalance() external {
-        if (!s_isMonitored[msg.sender]) {
-            // Get current array length (will be the new index)
-            s_userIndex[msg.sender] = s_usersToMonitor.length;
-
-            // Add user to array
-            s_usersToMonitor.push(msg.sender); // ← This is where array is set
-
-            // Mark as monitored
-            s_isMonitored[msg.sender] = true;
-
-            emit AutoRebalanceEnabled(msg.sender);
-        }
+    function addUser() external {
+        _addUser(msg.sender);
     }
 
-    // Before: [Alice, Bob, Charlie, Dave]
-    // Bob calls disableAutoRebalance() (index 1)
-
-    // Step 1: Move Dave (last) to Bob's position
-    // [Alice, Dave, Charlie, Dave]
-
-    // Step 2: Update Dave's index mapping
-    // s_userIndex[Dave] = 1
-
-    // Step 3: Pop last element
-    // [Alice, Dave, Charlie]
-
-    // Final: [Alice, Dave, Charlie]
-    /**
-     * @notice Opt out of automated portfolio rebalancing
-     * @dev Removes msg.sender from monitoring list using swap-and-pop
-     */
-    function disableAutoRebalance() external {
-        if (s_isMonitored[msg.sender]) {
-            uint256 index = s_userIndex[msg.sender];
-            uint256 lastIndex = s_usersToMonitor.length - 1;
-
-            // If not the last element, swap with last element
-            if (index != lastIndex) {
-                address lastUser = s_usersToMonitor[lastIndex];
-                s_usersToMonitor[index] = lastUser; // Move last user to deleted spot
-                s_userIndex[lastUser] = index; // Update moved user's index
-            }
-
-            // Remove last element
-            s_usersToMonitor.pop();
-
-            // Clean up mappings
-            delete s_isMonitored[msg.sender];
-            delete s_userIndex[msg.sender];
-
-            emit AutoRebalanceDisabled(msg.sender);
+    function _addUser(address _address) internal {
+        if (s_users.contains(_address)) {
+            return;
         }
+        s_users.add(_address);
+        emit UserAdded(_address);
+    }
+
+    function removeUser() external {
+        _removeUser(msg.sender);
+    }
+
+    function _removeUser(address _address) internal {
+        if (!s_users.contains(_address)) {
+            return;
+        }
+        s_users.remove(_address);
+        emit UserRemoved(_address);
     }
 
     /**
@@ -310,26 +298,30 @@ contract Balancer is Ownable, ReentrancyGuard {
      */
     function _needsRebalancing(address user) internal view returns (bool) {
         UserPortfolio memory portfolio = s_userToPortfolio[user];
-        AllocationPreference memory allocationPreference = s_userToAllocationPreference[user];
+        AllocationPreference
+            memory allocationPreference = s_userToAllocationPreference[user];
 
         address[] memory tokens = portfolio.tokens;
-        uint256[] balances = portfolio.balances;
+        uint256[] memory balances = portfolio.balances;
 
-        if (portfolio.tokens.length == 0 || allocationPreference.allocations.length == 0) {
+        if (
+            tokens.length == 0 || allocationPreference.allocations.length == 0
+        ) {
             return false;
         }
 
         // Calculate total portfolio value in USD
         uint256 totalPortfolioValueInUsd = 0;
-        uint256[] tokenValuesInUsd = new uint256[](tokens.length);
+        uint256[] memory tokenValuesUsd = new uint256[](tokens.length);
+        uint256 totalValueUsd = 0;
 
         for (uint256 i = 0; i < tokens.length; i++) {
             if (tokens[i] == i_wethToken) {
                 // WETH
-                tokenBalancesInUsd[i] = balances[i].getConversionRate(i_priceFeed);
+                tokenValuesUsd[i] = balances[i].getConversionRate(i_priceFeed);
             } else {
                 // USDC
-                tokenBalancesInUsd[i] = balances[i];
+                tokenValuesUsd[i] = balances[i];
             }
 
             totalValueUsd += tokenValuesUsd[i];
@@ -341,7 +333,8 @@ contract Balancer is Ownable, ReentrancyGuard {
 
         // Check if any allocation drifted beyond threshold
         for (uint256 i = 0; i < tokens.length; i++) {
-            uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
+            uint256 currentAllocation = (tokenValuesUsd[i] *
+                PERCENTAGE_FACTOR) / totalValueUsd;
             uint256 targetAllocation = allocationPreference.allocations[i];
 
             uint256 drift = currentAllocation > targetAllocation
@@ -363,23 +356,31 @@ contract Balancer is Ownable, ReentrancyGuard {
     function _rebalanceUser(address user) internal {
         // Implementation: swap tokens to restore target allocation
         // This is where you'd implement the actual rebalancing logic
-        emit PortfolioRebalanced(user);
+        // emit PortfolioRebalanced(user);
     }
 
-    function setMaxSupportedTokens(uint8 maxSupportedTokens) external onlyOwner {
+    function setMaxSupportedTokens(
+        uint8 maxSupportedTokens
+    ) external onlyOwner {
         s_maxSupportedTokens = maxSupportedTokens;
     }
 
     function addAllowedToken(address token) external onlyOwner {
         s_tokenToAllowed[token] = true;
-        IERC20Token(token).safeIncreaseAllowance(address(i_router), type(uint256).max);
+        IERC20Token(token).safeIncreaseAllowance(
+            address(i_router),
+            type(uint256).max
+        );
 
         emit InvestmentTokenAdded(token);
     }
 
     function removeAllowedToken(address token) external onlyOwner {
         s_tokenToAllowed[token] = false;
-        IERC20Token(token).safeDecreaseAllowance(address(i_router), type(uint256).max);
+        IERC20Token(token).safeDecreaseAllowance(
+            address(i_router),
+            type(uint256).max
+        );
         emit InvestmentTokenRemoved(token);
     }
 
@@ -390,7 +391,7 @@ contract Balancer is Ownable, ReentrancyGuard {
         return PERCENTAGE_FACTOR;
     }
 
-    function isAllowedToken(address token) external view returns (bool) {
+    function getTokenToAllowed(address token) external view returns (bool) {
         return s_tokenToAllowed[token];
     }
 
@@ -406,11 +407,27 @@ contract Balancer is Ownable, ReentrancyGuard {
         return i_wethToken;
     }
 
-    function getUserAllocation(address user) external view returns (AllocationPreference memory) {
+    function getUserToAllocationPreference(
+        address user
+    ) external view returns (AllocationPreference memory) {
         return s_userToAllocationPreference[user];
     }
 
-    function getUserPortfolio(address user) external view returns (UserPortfolio memory) {
+    function getUserToPortfolio(
+        address user
+    ) external view returns (UserPortfolio memory) {
         return s_userToPortfolio[user];
+    }
+
+    function getUserAtIndex(uint256 index) external view returns (address) {
+        return s_users.at(index);
+    }
+
+    function isUser(address _address) external view returns (bool) {
+        return s_users.contains(_address);
+    }
+
+    function getUsersLength() external view returns (uint256) {
+        return s_users.length();
     }
 }
