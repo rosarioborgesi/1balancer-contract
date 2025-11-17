@@ -8,22 +8,28 @@ import {IWETH} from "../../src/interfaces/IWETH.sol";
 import {IUSDC} from "../../src/interfaces/IUSDC.sol";
 import {IUniswapV2Router02} from "../../src/interfaces/uniswap-v2/IUniswapV2Router02.sol";
 import {IUniswapV2Pair} from "../../src/interfaces/uniswap-v2/IUniswapV2Pair.sol";
-import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02, CHAINLINK_FEED_ETH_USD} from "../../src/Constants.sol";
+import {
+    WETH_MAINNET,
+    USDC_MAINNET,
+    UNISWAP_V2_PAIR_USDC_WETH_MAINNET,
+    UNISWAP_V2_ROUTER_02_MAINNET,
+    CHAINLINK_FEED_ETH_USD_MAINNET
+} from "../../src/Constants.sol";
 
 contract RebalancingTest is Test {
     AggregatorV3Interface private s_priceFeed;
-    IWETH private constant weth = IWETH(WETH);
-    IUSDC private constant usdc = IUSDC(USDC);
+    IWETH private constant weth = IWETH(WETH_MAINNET);
+    IUSDC private constant usdc = IUSDC(USDC_MAINNET);
 
-    IUniswapV2Router02 private constant router = IUniswapV2Router02(UNISWAP_V2_ROUTER_02);
-    IUniswapV2Pair private constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH);
+    IUniswapV2Router02 private constant router = IUniswapV2Router02(UNISWAP_V2_ROUTER_02_MAINNET);
+    IUniswapV2Pair private constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH_MAINNET);
 
     address USER = makeAddr("user");
 
     uint256 constant STARTING_BALANCE = 100 ether;
 
     function setUp() public {
-        s_priceFeed = AggregatorV3Interface(CHAINLINK_FEED_ETH_USD);
+        s_priceFeed = AggregatorV3Interface(CHAINLINK_FEED_ETH_USD_MAINNET);
         vm.deal(USER, STARTING_BALANCE);
     }
 

@@ -3,21 +3,27 @@ pragma solidity ^0.8.30;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import {CHAINLINK_FEED_ETH_USD} from "../../src/Constants.sol";
 import {IERC20} from "../../src/interfaces/IERC20.sol";
 import {IWETH} from "../../src/interfaces/IWETH.sol";
 import {IUSDC} from "../../src/interfaces/IUSDC.sol";
 import {IUniswapV2Router02} from "../../src/interfaces/uniswap-v2/IUniswapV2Router02.sol";
 import {IUniswapV2Pair} from "../../src/interfaces/uniswap-v2/IUniswapV2Pair.sol";
-import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02} from "../../src/Constants.sol";
+import {
+    WETH_MAINNET,
+    USDC_MAINNET,
+    UNISWAP_V2_PAIR_USDC_WETH_MAINNET,
+    UNISWAP_V2_ROUTER_02_MAINNET,
+    CHAINLINK_FEED_ETH_USD_MAINNET,
+    USDC_MAINNET
+} from "../../src/Constants.sol";
 
 contract SwapWithChainlinkTest is Test {
     AggregatorV3Interface private s_priceFeed;
-    IWETH private constant weth = IWETH(WETH);
-    IUSDC private constant usdc = IUSDC(USDC);
+    IWETH private constant weth = IWETH(WETH_MAINNET);
+    IUSDC private constant usdc = IUSDC(USDC_MAINNET);
 
-    IUniswapV2Router02 private constant router = IUniswapV2Router02(UNISWAP_V2_ROUTER_02);
-    IUniswapV2Pair private constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH);
+    IUniswapV2Router02 private constant router = IUniswapV2Router02(UNISWAP_V2_ROUTER_02_MAINNET);
+    IUniswapV2Pair private constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH_MAINNET);
 
     address user = makeAddr("user");
 
@@ -26,7 +32,8 @@ contract SwapWithChainlinkTest is Test {
     uint8 constant SLIPPAGE_TOLERANCE = 10;
 
     function setUp() public {
-        s_priceFeed = AggregatorV3Interface(CHAINLINK_FEED_ETH_USD);
+        vm.createSelectFork(vm.envString("FORK_URL"));
+        s_priceFeed = AggregatorV3Interface(CHAINLINK_FEED_ETH_USD_MAINNET);
         vm.deal(user, STARTING_BALANCE);
     }
 
@@ -58,8 +65,8 @@ contract SwapWithChainlinkTest is Test {
         vm.stopPrank();
 
         address[] memory path = new address[](2);
-        path[0] = WETH;
-        path[1] = USDC;
+        path[0] = WETH_MAINNET;
+        path[1] = USDC_MAINNET;
 
         uint256 wethAmountIn = 1 ether;
         uint256 ethUsdRate = getEthUsdRateInWei();
@@ -106,8 +113,8 @@ contract SwapWithChainlinkTest is Test {
         vm.stopPrank();
 
         address[] memory path = new address[](2);
-        path[0] = USDC;
-        path[1] = WETH;
+        path[0] = USDC_MAINNET;
+        path[1] = WETH_MAINNET;
 
         uint256 ethUsdRate = getEthUsdRateInWei();
 

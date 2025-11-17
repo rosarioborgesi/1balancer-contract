@@ -6,20 +6,27 @@ import {IWETH} from "../../src/interfaces/IWETH.sol";
 import {IUSDC} from "../../src/interfaces/IUSDC.sol";
 import {IUniswapV2Router02} from "../../src/interfaces/uniswap-v2/IUniswapV2Router02.sol";
 import {IUniswapV2Pair} from "../../src/interfaces/uniswap-v2/IUniswapV2Pair.sol";
-import {WETH, USDC, UNISWAP_V2_PAIR_USDC_WETH, UNISWAP_V2_ROUTER_02, CHAINLINK_FEED_ETH_USD} from "../../src/Constants.sol";
+import {
+    WETH_MAINNET,
+    USDC_MAINNET,
+    UNISWAP_V2_PAIR_USDC_WETH_MAINNET,
+    UNISWAP_V2_ROUTER_02_MAINNET,
+    CHAINLINK_FEED_ETH_USD_MAINNET
+} from "../../src/Constants.sol";
 import {Balancer} from "../../src/Balancer.sol";
 
 contract BalancerForkTest is Test {
     Balancer public balancer;
 
-    IWETH public constant weth = IWETH(WETH);
-    IUSDC public constant usdc = IUSDC(USDC);
+    IWETH public constant weth = IWETH(WETH_MAINNET);
+    IUSDC public constant usdc = IUSDC(USDC_MAINNET);
 
-    IUniswapV2Router02 public constant router = IUniswapV2Router02(UNISWAP_V2_ROUTER_02);
-    IUniswapV2Pair public constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH);
+    IUniswapV2Router02 public constant router = IUniswapV2Router02(UNISWAP_V2_ROUTER_02_MAINNET);
+    IUniswapV2Pair public constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH_MAINNET);
 
     uint256 constant STARTING_BALANCE = 100 ether;
     uint8 constant REBALANCE_THRESHOLD = 5;
+    uint8 constant MAX_SUPPORTED_TOKENS = 2;
 
     address user = makeAddr("user");
 
@@ -27,7 +34,7 @@ contract BalancerForkTest is Test {
         vm.createSelectFork(vm.envString("FORK_URL"));
         vm.deal(user, STARTING_BALANCE);
 
-        balancer = new Balancer(address(weth), address(router), CHAINLINK_FEED_ETH_USD, REBALANCE_THRESHOLD, 2);
+        balancer = new Balancer(address(weth), address(router), CHAINLINK_FEED_ETH_USD_MAINNET, REBALANCE_THRESHOLD, 2);
 
         balancer.addAllowedToken(address(weth));
         balancer.addAllowedToken(address(usdc));

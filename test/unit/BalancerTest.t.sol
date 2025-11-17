@@ -6,16 +6,15 @@ import {Balancer} from "../../src/Balancer.sol";
 import {IERC20} from "../../src/interfaces/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {WETH, USDC} from "../mocks/Tokens.sol";
-import {CHAINLINK_FEED_ETH_USD} from "../../src/Constants.sol";
+import {CHAINLINK_FEED_ETH_USD_MAINNET} from "../../src/Constants.sol";
 import {stdError} from "forge-std/StdError.sol";
+import {DeployBalancer} from "../../script/DeployBalancer.s.sol";
 
 contract BalancerTest is Test {
     Balancer public balancer;
     WETH public weth;
     USDC public usdc;
-    /* address public constant WETH_TOKEN =
-        0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2; */
-    address public constant ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
+
     uint8 public constant MAX_SUPPORTED_TOKENS = 2;
     uint8 public constant REBALANCE_THRESHOLD = 5;
 
@@ -23,16 +22,13 @@ contract BalancerTest is Test {
     address USER2 = makeAddr("user2");
 
     function setUp() public {
-        weth = new WETH();
-        weth.mint(USER, 10_000 ether);
-
-        usdc = new USDC();
-        usdc.mint(USER, 10_000 * 10 ** 6);
-
-        balancer = new Balancer(address(weth), ROUTER, CHAINLINK_FEED_ETH_USD, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS);
-
+        DeployBalancer deployBalancer = new DeployBalancer();
+        balancer = deployBalancer.run();
         balancer.addAllowedToken(address(weth));
         balancer.addAllowedToken(address(usdc));
+
+        weth.mint(USER, 10_000 ether);
+        usdc.mint(USER, 10_000 * 10 ** 6);
     }
 
     function testUserAllocationIs100Percent() public {
@@ -119,7 +115,5 @@ contract BalancerTest is Test {
         assertEq(balancer.getUserAtIndex(0), USER2);
         assertEq(balancer.isUser(USER), false);
         assertEq(balancer.isUser(USER2), true);
-        
     }
-    
 }

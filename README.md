@@ -47,4 +47,8 @@ forge test --fork-url $FORK_URL \
     --match-path test/research/SwapWithChainlinkTest.t.sol \
     --match-test testSwapUsdcToWethWithOraclePrices\
     -vvv	
+
+# Execute an entire file
+forge test --match-path test/research/SwapWithChainlinkTest.t.sol
+forge test --match-path test/research/UniswapV2SwapTest.t.sol
 ```
