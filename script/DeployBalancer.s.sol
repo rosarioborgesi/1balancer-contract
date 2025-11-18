@@ -6,17 +6,22 @@ import {Balancer} from "../src/Balancer.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
 
 contract DeployBalancer is Script {
-    uint8 constant REBALANCE_THRESHOLD = 5;
+    uint256 constant REBALANCE_THRESHOLD = 5 * 1e16; // 5% in 18 decimals
     uint8 constant MAX_SUPPORTED_TOKENS = 2;
 
-    function run() external returns (Balancer) {
-        HelperConfig helperConfig = new HelperConfig();
-        (address priceFeed, address weth, address usdc, address router) = helperConfig.activeNetworkConfig();
+    function run() public {
+        deployContract();
+    }
 
-        vm.startBroadcast();
-        Balancer balancer = new Balancer(priceFeed, weth, router, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS);
+    function deployContract() public returns (Balancer, HelperConfig) {
+        HelperConfig helperConfig = new HelperConfig();
+        HelperConfig.NetworkConfig memory config = helperConfig.getConfig();
+
+        vm.startBroadcast(config.account);
+        Balancer balancer =
+            new Balancer(config.weth, config.usdc, config.router, config.priceFeed, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS);
         vm.stopBroadcast();
 
-        return balancer;
+        return (balancer, helperConfig);
     }
 }

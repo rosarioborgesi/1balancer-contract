@@ -36,6 +36,7 @@ import {IERC20Token} from "./interfaces/IERC20Token.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {PriceConverter} from "./PriceConverter.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {console2} from "forge-std/console2.sol";
 
 contract Balancer is Ownable, ReentrancyGuard {
     /*
@@ -77,7 +78,8 @@ contract Balancer is Ownable, ReentrancyGuard {
     // Represents 100% for allocations
     uint256 private constant PERCENTAGE_FACTOR = 1e18;
     address private immutable i_wethToken;
-    uint8 private immutable i_rebalanceThreshold;
+    address private immutable i_usdcToken;
+    uint256 private immutable i_rebalanceThreshold;
 
     IUniswapV2Router02 private immutable i_router;
 
@@ -89,7 +91,7 @@ contract Balancer is Ownable, ReentrancyGuard {
     // token -> supported
     mapping(address => bool) private s_tokenToAllowed;
     // user -> their portfolio holdings
-    mapping(address => UserPortfolio) private s_userToPortfolio;
+    mapping(address => UserPortfolio) internal s_userToPortfolio;
 
     EnumerableSet.AddressSet private s_users;
 
@@ -115,12 +117,14 @@ contract Balancer is Ownable, ReentrancyGuard {
      */
     constructor(
         address wethToken,
+        address usdcToken,
         address router,
         address priceFeed,
-        uint8 rebalanceThreshold,
+        uint256 rebalanceThreshold,
         uint8 maxSupportedTokens
     ) Ownable(msg.sender) {
         i_wethToken = wethToken;
+        i_usdcToken = usdcToken;
         i_router = IUniswapV2Router02(router);
         i_priceFeed = AggregatorV3Interface(priceFeed);
         i_rebalanceThreshold = rebalanceThreshold;
@@ -254,6 +258,10 @@ contract Balancer is Ownable, ReentrancyGuard {
         emit UserRemoved(_address);
     }
 
+    function needsRebalancing() external view returns (bool) {
+        return _needsRebalancing(msg.sender);
+    }
+
     /**
      * @dev Check if a user's portfolio has drifted from target allocation
      * @param user The user to check
@@ -277,14 +285,20 @@ contract Balancer is Ownable, ReentrancyGuard {
 
         for (uint256 i = 0; i < tokens.length; i++) {
             if (tokens[i] == i_wethToken) {
-                // WETH
+                // WETH - convert to USD using price feed (returns 18 decimals)
                 tokenValuesUsd[i] = balances[i].getConversionRate(i_priceFeed);
-            } else {
+                console2.log("WETH value in USD", tokenValuesUsd[i]);
+            } else if (tokens[i] == i_usdcToken){
                 // USDC
+                tokenValuesUsd[i] = balances[i] * 1e12;
+                console2.log("USDC value in USD", tokenValuesUsd[i]);
+            } else {
                 tokenValuesUsd[i] = balances[i];
+                console2.log("Other token value in USD", tokenValuesUsd[i]);
             }
 
             totalValueUsd += tokenValuesUsd[i];
+            console2.log("Total value in USD", totalValueUsd);
         }
 
         if (totalValueUsd == 0) {
@@ -293,12 +307,18 @@ contract Balancer is Ownable, ReentrancyGuard {
 
         // Check if any allocation drifted beyond threshold
         for (uint256 i = 0; i < tokens.length; i++) {
+            console2.log("Token index", i);
+            console2.log("Token address", tokens[i]);
             uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
+            console2.log("Current allocation", currentAllocation);
+            
             uint256 targetAllocation = allocationPreference.allocations[i];
+            console2.log("Target allocation", targetAllocation);
 
             uint256 drift = currentAllocation > targetAllocation
                 ? currentAllocation - targetAllocation
                 : targetAllocation - currentAllocation;
+            console2.log("Drift", drift);
 
             // If drift exceeds threshold (e.g., 5%), rebalance needed
             if (drift > i_rebalanceThreshold) {

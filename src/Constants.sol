@@ -32,3 +32,8 @@ address constant CHAINLINK_FEED_ETH_USD_MAINNET = 0x5147eA642CAEF7BD9c1265AadcA7
 
 // Chainlink Price Feed Addresses for Ethereum Sepolia
 address constant CHAINLINK_FEED_ETH_USD_SEPOLIA = 0x694AA1769357215DE4FAC081bf1f309aDC325306;
+
+// Chain ID
+uint256 constant LOCAL_CHAIN_ID = 31337;
+uint256 constant SEPOLIA_CHAIN_ID = 11155111;
+uint256 constant MAINNET_CHAIN_ID = 1;

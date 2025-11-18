@@ -34,11 +34,15 @@ contract BalancerForkTest is Test {
         vm.createSelectFork(vm.envString("FORK_URL"));
         vm.deal(user, STARTING_BALANCE);
 
-        balancer = new Balancer(address(weth), address(router), CHAINLINK_FEED_ETH_USD_MAINNET, REBALANCE_THRESHOLD, 2);
+        balancer = new Balancer(address(weth), address(usdc), address(router), CHAINLINK_FEED_ETH_USD_MAINNET, REBALANCE_THRESHOLD, 2);
 
         balancer.addAllowedToken(address(weth));
         balancer.addAllowedToken(address(usdc));
     }
+
+    /*////////////////////////////////////////////////////////////// 
+                            DEPOSIT
+    //////////////////////////////////////////////////////////////*/
 
     function testCreatingUserAllocationAndDepositingEth() public {
         address[] memory investmentTokens = new address[](2);

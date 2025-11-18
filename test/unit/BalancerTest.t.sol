@@ -3,33 +3,56 @@ pragma solidity ^0.8.30;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {Balancer} from "../../src/Balancer.sol";
+import {HelperConfig} from "script/HelperConfig.s.sol";
 import {IERC20} from "../../src/interfaces/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {WETH, USDC} from "../mocks/Tokens.sol";
 import {CHAINLINK_FEED_ETH_USD_MAINNET} from "../../src/Constants.sol";
 import {stdError} from "forge-std/StdError.sol";
 import {DeployBalancer} from "../../script/DeployBalancer.s.sol";
+import {PriceConverter} from "../../src/PriceConverter.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 contract BalancerTest is Test {
     Balancer public balancer;
+    HelperConfig public helperConfig;
+
     WETH public weth;
     USDC public usdc;
+
+    AggregatorV3Interface public priceFeed;
 
     uint8 public constant MAX_SUPPORTED_TOKENS = 2;
     uint8 public constant REBALANCE_THRESHOLD = 5;
 
+    address owner;
     address USER = makeAddr("user");
     address USER2 = makeAddr("user2");
 
+    using PriceConverter for uint256;
+
     function setUp() public {
-        DeployBalancer deployBalancer = new DeployBalancer();
-        balancer = deployBalancer.run();
+        DeployBalancer deployer = new DeployBalancer();
+        (balancer, helperConfig) = deployer.deployContract();
+
+        HelperConfig.NetworkConfig memory config = helperConfig.getConfig();
+        priceFeed = AggregatorV3Interface(config.priceFeed);
+        weth = WETH(payable(config.weth));
+        usdc = USDC(payable(config.usdc));
+        owner = config.account;
+
+        vm.startPrank(owner);
         balancer.addAllowedToken(address(weth));
         balancer.addAllowedToken(address(usdc));
+        vm.stopPrank();
 
         weth.mint(USER, 10_000 ether);
         usdc.mint(USER, 10_000 * 10 ** 6);
     }
+
+    /*////////////////////////////////////////////////////////////// 
+                            SET USER ALLOCATION
+    //////////////////////////////////////////////////////////////*/
 
     function testUserAllocationIs100Percent() public {
         address[] memory investmentTokens = new address[](2);
@@ -75,6 +98,10 @@ contract BalancerTest is Test {
         vm.stopPrank();
     }
 
+    /*////////////////////////////////////////////////////////////// 
+                            ADD USER
+    //////////////////////////////////////////////////////////////*/
+
     function testAddOneUser() public {
         vm.prank(USER);
         balancer.addUser();
@@ -96,6 +123,10 @@ contract BalancerTest is Test {
         assertEq(balancer.isUser(USER), true);
         assertEq(balancer.isUser(USER2), true);
     }
+
+    /*////////////////////////////////////////////////////////////// 
+                            REMOVE USER
+    //////////////////////////////////////////////////////////////*/
 
     function testRemoveUser() public {
         vm.prank(USER);

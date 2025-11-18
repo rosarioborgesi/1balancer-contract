@@ -51,4 +51,5 @@ forge test --fork-url $FORK_URL \
 # Execute an entire file
 forge test --match-path test/research/SwapWithChainlinkTest.t.sol
 forge test --match-path test/research/UniswapV2SwapTest.t.sol
+forge test --match-path test/unit/BalancerTest.t.sol
 ```
