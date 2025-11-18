@@ -37,8 +37,9 @@ contract BalancerHarnessTest is Test {
         owner = config.account;
 
         vm.startPrank(owner);
-        harness =
-            new BalancerHarness(config.weth, config.usdc, config.router, config.priceFeed, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS);
+        harness = new BalancerHarness(
+            config.weth, config.usdc, config.router, config.priceFeed, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS
+        );
         harness.addAllowedToken(address(weth));
         harness.addAllowedToken(address(usdc));
         vm.stopPrank();
@@ -76,7 +77,7 @@ contract BalancerHarnessTest is Test {
 
         uint256[] memory balances = new uint256[](2);
         balances[0] = 1 ether; // 1 WETH, approximately 99% of the portfolio value
-        balances[1] = 1e6;     // 1 USDC, approximately 1% of the portfolio value
+        balances[1] = 1e6; // 1 USDC, approximately 1% of the portfolio value
 
         vm.startPrank(USER);
         harness.setUserAllocation(allocationPreference);
@@ -86,7 +87,6 @@ contract BalancerHarnessTest is Test {
 
         assertTrue(needsRebalancing);
     }
-
 
     function testRebalancesWhenUsdcOutweighsWeth() public {
         // Deploying the harness

@@ -18,8 +18,9 @@ contract DeployBalancer is Script {
         HelperConfig.NetworkConfig memory config = helperConfig.getConfig();
 
         vm.startBroadcast(config.account);
-        Balancer balancer =
-            new Balancer(config.weth, config.usdc, config.router, config.priceFeed, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS);
+        Balancer balancer = new Balancer(
+            config.weth, config.usdc, config.router, config.priceFeed, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS
+        );
         vm.stopBroadcast();
 
         return (balancer, helperConfig);

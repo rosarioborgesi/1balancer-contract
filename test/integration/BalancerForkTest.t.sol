@@ -34,7 +34,9 @@ contract BalancerForkTest is Test {
         vm.createSelectFork(vm.envString("FORK_URL"));
         vm.deal(user, STARTING_BALANCE);
 
-        balancer = new Balancer(address(weth), address(usdc), address(router), CHAINLINK_FEED_ETH_USD_MAINNET, REBALANCE_THRESHOLD, 2);
+        balancer = new Balancer(
+            address(weth), address(usdc), address(router), CHAINLINK_FEED_ETH_USD_MAINNET, REBALANCE_THRESHOLD, 2
+        );
 
         balancer.addAllowedToken(address(weth));
         balancer.addAllowedToken(address(usdc));
@@ -148,4 +150,6 @@ contract BalancerForkTest is Test {
         assertGt(portfolio.balances[0], 1 * 1e17, "USDC balance is not greater than 1e17 wei");
         assertEq(portfolio.balances[1], 5_000 * 1e6, "WETH balance is not greater then 1 USDC");
     }
+
+    
 }
