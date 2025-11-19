@@ -150,6 +150,4 @@ contract BalancerForkTest is Test {
         assertGt(portfolio.balances[0], 1 * 1e17, "USDC balance is not greater than 1e17 wei");
         assertEq(portfolio.balances[1], 5_000 * 1e6, "WETH balance is not greater then 1 USDC");
     }
-
-    
 }

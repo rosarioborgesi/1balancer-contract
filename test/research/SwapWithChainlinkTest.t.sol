@@ -16,6 +16,7 @@ import {
     CHAINLINK_FEED_ETH_USD_MAINNET,
     USDC_MAINNET
 } from "../../src/Constants.sol";
+import {PriceConverter} from "../../src/PriceConverter.sol";
 
 contract SwapWithChainlinkTest is Test {
     AggregatorV3Interface private s_priceFeed;
@@ -29,7 +30,10 @@ contract SwapWithChainlinkTest is Test {
 
     uint256 constant STARTING_BALANCE = 100 ether;
 
-    uint8 constant SLIPPAGE_TOLERANCE = 10;
+    uint256 constant SLIPPAGE_TOLERANCE = 1 * 1e17; // 10%
+    uint256 constant PERCENTAGE_FACTOR = 1e18; // 100%
+
+    using PriceConverter for uint256;
 
     function setUp() public {
         vm.createSelectFork(vm.envString("FORK_URL"));
@@ -37,22 +41,11 @@ contract SwapWithChainlinkTest is Test {
         vm.deal(user, STARTING_BALANCE);
     }
 
-    function getEthUsdRateInWei() public view returns (uint256) {
-        (, int256 answer,,,) = s_priceFeed.latestRoundData();
-        console2.log("ETH / USD rate", answer); // answer: 329817000000 - 8 decimals
-
-        // ETH/USD rate in 18 decimals
-        uint256 ethUsdRateInWei = uint256(answer * 1e10);
-        console2.log("ETH / USD rate in 18 decimals", ethUsdRateInWei);
-
-        return ethUsdRateInWei; // 3298170000000000000000 - 18 decimals (wei)
-    }
-
     /* 
     logs:
         ETH / USD rate 328634000000
         ETH / USD rate in 18 decimals 3286340000000000000000
-        amountOutMin 2957
+        amountOutMin 2784423060
         WETH 1000000000000000000
         USDC 3273362536
     */
@@ -69,11 +62,13 @@ contract SwapWithChainlinkTest is Test {
         path[1] = USDC_MAINNET;
 
         uint256 wethAmountIn = 1 ether;
-        uint256 ethUsdRate = getEthUsdRateInWei();
 
-        uint256 minAcceptedUsdc = (ethUsdRate - ((ethUsdRate * SLIPPAGE_TOLERANCE) / 100)) / 1e18; // ETH / USD rate - 10%
+        uint256 wethAmountInUsd = wethAmountIn.getConversionRate(s_priceFeed);
 
-        console2.log("amountOutMin", minAcceptedUsdc);
+        uint256 minAcceptedUsdc =
+            (wethAmountInUsd - ((wethAmountInUsd * SLIPPAGE_TOLERANCE) / PERCENTAGE_FACTOR)) / 1e12; // ETH / USD rate - 10%
+
+        console2.log("amountOutMin", minAcceptedUsdc); // 2784423060 - USDC 6 decimals
 
         vm.prank(user);
         // Input token amount and all subsequent output token amounts
@@ -85,8 +80,8 @@ contract SwapWithChainlinkTest is Test {
             deadline: block.timestamp
         });
 
-        console2.log("WETH", amounts[0]); // Input WETH 1000000000000000000 - 18 decimals
-        console2.log("USDC", amounts[1]); // Output USDC 3224338599 - 6 decimals
+        console2.log("Input WETH", amounts[0]); // Input WETH 1000000000000000000 - 18 decimals
+        console2.log("Output USDC", amounts[1]); // Output USDC 3078208354 - 6 decimals
 
         assertGe(usdc.balanceOf(user), minAcceptedUsdc, "USDC balance of user is not greater than minAcceptedUsdc");
         assertEq(usdc.balanceOf(user), amounts[1], "USDC balance of user is not equal to amounts[1]");
@@ -101,8 +96,6 @@ contract SwapWithChainlinkTest is Test {
         WETH 997702531702557978
     */
     function testSwapUsdcToWethWithOraclePrices() public {
-        // Mint USDC to the user. Only the master minter can mint USDC.
-        // https://github.com/circlefin/stablecoin-evm/blob/master/doc/tokendesign.md
         address masterMinter = usdc.masterMinter();
         vm.prank(masterMinter);
         usdc.configureMinter(user, type(uint256).max);
@@ -116,13 +109,17 @@ contract SwapWithChainlinkTest is Test {
         path[0] = USDC_MAINNET;
         path[1] = WETH_MAINNET;
 
-        uint256 ethUsdRate = getEthUsdRateInWei();
+        uint256 ethAmount = 1 ether;
 
-        uint256 usdcAmountIn = ethUsdRate / 1e12; // 3298170000 - 6 decimals
+        uint256 ethUsdRate = ethAmount.getConversionRate(s_priceFeed);
 
-        uint256 minAcceptedWeth = (1 ether - ((1 ether * SLIPPAGE_TOLERANCE) / 100)); // 1 ether - 10%
+        uint256 usdcAmountIn = ethUsdRate / 1e12;
 
-        console2.log("amountOutMin", minAcceptedWeth);
+        console2.log("usdcAmountIn", usdcAmountIn); // 3076289657 - USDC 6 decimals
+
+        uint256 minAcceptedWeth = (ethAmount - ((ethAmount * SLIPPAGE_TOLERANCE) / PERCENTAGE_FACTOR)); // 1 ether - 10%
+
+        console2.log("amountOutMin", minAcceptedWeth); // 900000000000000000 - WETH 18 decimals
 
         vm.prank(user);
         // Input token amount and all subsequent output token amounts
@@ -134,8 +131,8 @@ contract SwapWithChainlinkTest is Test {
             deadline: block.timestamp
         });
 
-        console2.log("USDC", amounts[0]); // Input USDC 3302912100 - 6 decimals
-        console2.log("WETH", amounts[1]); // Output WETH 998256268662043214 -18 decimals
+        console2.log("Input USDC", amounts[0]); // Input USDC 3076289657 - 6 decimals
+        console2.log("Output WETH", amounts[1]); // Output WETH 994045455604138669 -18 decimals
 
         assertGe(weth.balanceOf(user), minAcceptedWeth, "WETH balance of user is not greater than minAcceptedWeth");
         assertEq(weth.balanceOf(user), amounts[1], "WETH balance of user is not equal to amounts[1]");
