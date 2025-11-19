@@ -178,19 +178,47 @@ contract Balancer is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Deposit an asset and automatically invest it based on your allocation preference
-     * @dev Requires that the user's allocation preference is set via setUserAllocation()
-     * @dev Supports two deposit methods:
-     *      1. Native ETH: Send ETH with msg.value (contract wraps to WETH automatically)
-     *      2. ERC20 tokens: Pre-approve this contract, then call with amount (msg.value = 0)
-     * @param inputToken The token address to deposit. Use WETH address if depositing native ETH
-     * @param amount The amount to deposit. Must equal msg.value if depositing ETH, otherwise the ERC20 amount
-     * @dev The contract swaps the input token into your portfolio tokens according to your allocation
-     * @dev Portfolio balances are tracked and can be withdrawn later
+     * @notice Deposit tokens and automatically invest them according to your allocation preference
+     * @dev Requires allocation preference to be set via setUserAllocation() before depositing
+     * @dev Tokens are deposited then automatically rebalanced to match target allocation
+     *
+     * Supported Deposit Methods:
+     * 1. Native ETH: Send ETH via msg.value (automatically wrapped to WETH)
+     *    - Set inputToken to WETH address
+     *    - Set amount equal to msg.value
+     * 2. WETH (ERC20): Pre-approve this contract, call with msg.value = 0
+     * 3. USDC (ERC20): Pre-approve this contract, call with msg.value = 0
+     *
+     * @param inputToken The token to deposit (must be WETH or USDC address)
+     * @param amount The amount to deposit (in token's native decimals)
+     *
+     * Process Flow:
+     * 1. Receives tokens from user (wraps ETH to WETH if needed)
+     * 2. Adds deposited amount to portfolio
+     * 3. Automatically rebalances portfolio to match target allocation
+     *
+     * Example:
+     * - User has 50/50 WETH/USDC allocation
+     * - Deposits 1 WETH
+     * - Contract adds 1 WETH to portfolio (now unbalanced)
+     * - Rebalancing swaps ~0.5 WETH → USDC
+     * - Final portfolio: ~0.5 WETH + ~$1500 USDC
+     *
+     * Requirements:
+     * - User must have set allocation preference
+     * - inputToken must be in allowed tokens list
+     * - For ETH deposits: inputToken must be WETH and amount must equal msg.value
+     * - For ERC20 deposits: Must have approved this contract to spend inputToken
+     *
+     * Emits:
+     * - {Swap} events from rebalancing (if swaps occur)
+     * - {PortfolioUpdated} with final portfolio state
+     *
+     * @custom:security Uses nonReentrant to prevent reentrancy attacks
      */
     function deposit(address inputToken, uint256 amount) external payable nonReentrant {
-        uint256 allocationsLength = s_userToAllocationPreference[msg.sender].allocations.length;
-        if (allocationsLength == 0) {
+        // Validation checks
+        if (s_userToAllocationPreference[msg.sender].allocations.length == 0) {
             revert Balancer__AllocationNotSet();
         }
         if (!s_tokenToAllowed[inputToken]) {
@@ -199,6 +227,8 @@ contract Balancer is Ownable, ReentrancyGuard {
         if (amount == 0 && msg.value == 0) {
             revert Balancer__ZeroAmount();
         }
+
+        // Handle ETH vs ERC20 deposits
         if (msg.value > 0) {
             if (inputToken != i_wethToken) {
                 revert Balancer__InputNotWeth();
@@ -206,44 +236,67 @@ contract Balancer is Ownable, ReentrancyGuard {
             if (amount != msg.value) {
                 revert Balancer__MsgValueAmountMismatch(amount, msg.value);
             }
-            IERC20Token(inputToken).deposit{value: amount}();
+            // Wrap ETH to WETH
+            IWETH(inputToken).deposit{value: amount}();
         } else {
+            // Transfer ERC20 from user
             IERC20Token(inputToken).safeTransferFrom(msg.sender, address(this), amount);
         }
 
-        AllocationPreference memory pref = s_userToAllocationPreference[msg.sender];
-        uint256 amountOutMin = 1;
-        address[] memory path = new address[](2);
-        path[0] = inputToken;
+        // Add deposited tokens to portfolio
+        _addToPortfolio(msg.sender, inputToken, amount);
 
-        for (uint256 i = 0; i < pref.investmentTokens.length; i++) {
-            // Swaps either WETH -> USDC or USDC -> WETH according to the allocation preference
-            path[1] = pref.investmentTokens[i];
-            uint256 amountToSwap = (pref.allocations[i] * amount) / PERCENTAGE_FACTOR;
-
-            if (pref.investmentTokens[i] == inputToken) {
-                s_userToPortfolio[msg.sender].tokens.push(pref.investmentTokens[i]);
-                s_userToPortfolio[msg.sender].balances.push(amountToSwap);
-                continue;
-            }
-
-            uint256[] memory amounts = i_router.swapExactTokensForTokens({
-                amountIn: amountToSwap,
-                amountOutMin: amountOutMin,
-                path: path,
-                to: address(this),
-                deadline: block.timestamp
-            });
-
-            s_userToPortfolio[msg.sender].tokens.push(pref.investmentTokens[i]);
-            s_userToPortfolio[msg.sender].balances.push(amounts[1]);
-
-            emit Swap(msg.sender, inputToken, pref.investmentTokens[i], amountToSwap, amounts[1]);
-        }
-
+        // Add user to tracking set
         _addUser(msg.sender);
 
-        emit PortfolioUpdated(msg.sender, s_userToPortfolio[msg.sender]);
+        // Rebalance portfolio to match target allocation
+        _rebalanceUserPortfolio(msg.sender);
+    }
+
+    /**
+     * @dev Adds deposited tokens to user's portfolio
+     * @dev Creates portfolio if first deposit, otherwise updates existing balance
+     * @param user The user making the deposit
+     * @param token The token being deposited
+     * @param amount The amount to add
+     */
+    function _addToPortfolio(address user, address token, uint256 amount) private {
+        UserPortfolio storage portfolio = s_userToPortfolio[user];
+
+        // Check if portfolio is empty (first deposit)
+        if (portfolio.tokens.length == 0) {
+            // Initialize portfolio with all tokens from allocation preference
+            AllocationPreference memory pref = s_userToAllocationPreference[user];
+
+            for (uint256 i = 0; i < pref.investmentTokens.length; i++) {
+                portfolio.tokens.push(pref.investmentTokens[i]);
+                // Set balance to amount if it's the deposit token, otherwise 0
+                if (pref.investmentTokens[i] == token) {
+                    portfolio.balances.push(amount);
+                } else {
+                    portfolio.balances.push(0);
+                }
+            }
+        } else {
+            // Find token index and update balance
+            uint256 tokenIndex = _findTokenIndex(portfolio.tokens, token);
+            portfolio.balances[tokenIndex] += amount;
+        }
+    }
+
+    /**
+     * @dev Finds the index of a token in the tokens array
+     * @param tokens Array of token addresses
+     * @param token Token to find
+     * @return index The index of the token (reverts if not found)
+     */
+    function _findTokenIndex(address[] memory tokens, address token) private pure returns (uint256 index) {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            if (tokens[i] == token) {
+                return i;
+            }
+        }
+        revert Balancer__TokenNotSupported(token);
     }
 
     function addUser() external {
