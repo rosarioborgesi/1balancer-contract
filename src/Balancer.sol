@@ -54,14 +54,14 @@ contract Balancer is Ownable, ReentrancyGuard {
     error Balancer__InvalidRebalanceThreshold(uint256 rebalanceThreshold);
     error Balancer__InvalidMaxSupportedTokens(uint256 maxSupportedTokens);
 
-    /*
+    /**
      * Libraries
      */
     using SafeERC20 for IERC20Token;
     using PriceConverter for uint256;
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    /*
+    /**
      * Type declarations
      */
     struct AllocationPreference {
@@ -74,7 +74,7 @@ contract Balancer is Ownable, ReentrancyGuard {
         uint256[] balances; // balance of each token
     }
 
-    /*
+    /**
      * State Variables
      */
     // Represents 100% for allocations
@@ -97,7 +97,7 @@ contract Balancer is Ownable, ReentrancyGuard {
 
     EnumerableSet.AddressSet private s_users;
 
-    /*
+    /**
      * Events
      */
     event AllocationSet(address indexed user, AllocationPreference allocation);
@@ -114,7 +114,7 @@ contract Balancer is Ownable, ReentrancyGuard {
     event UserAdded(address indexed user);
     event UserRemoved(address indexed user);
 
-    /*
+    /**
      * Constructor
      */
     constructor(
@@ -142,25 +142,25 @@ contract Balancer is Ownable, ReentrancyGuard {
         s_maxSupportedTokens = maxSupportedTokens;
     }
 
-    /*
-    * External functions
-    */
+    /**
+     * External functions
+     */
     /**
      * @notice Sets or updates the caller's target allocation preferences for their portfolio
      * @dev Must be called before making any deposits. Can be updated at any time.
      * @dev Validates that allocations sum to exactly 100% and all tokens are supported
-     * 
+     *
      * @param allocationPreference Struct containing:
      *        - investmentTokens: Array of token addresses to invest in
      *        - allocations: Array of target percentages (must sum to 1e18 = 100%)
-     * 
+     *
      * Requirements:
      * - Number of tokens must not exceed s_maxSupportedTokens
      * - investmentTokens and allocations arrays must have equal length
      * - No allocation can be zero
      * - All tokens must be in the allowed tokens list (added by owner)
      * - Allocations must sum to exactly PERCENTAGE_FACTOR (1e18 = 100%)
-     * 
+     *
      * Example:
      * ```
      * AllocationPreference({
@@ -168,15 +168,15 @@ contract Balancer is Ownable, ReentrancyGuard {
      *     allocations: [5e17, 5e17]  // 50% WETH, 50% USDC
      * })
      * ```
-     * 
+     *
      * Effects:
      * - Overwrites any previous allocation preference for the caller
      * - Does NOT automatically rebalance existing portfolio (call deposit/rebalance separately)
      * - Future deposits will follow this new allocation
-     * 
+     *
      * Emits:
      * - {AllocationSet} event with user address and new allocation preference
-     * 
+     *
      * @custom:validation Performs comprehensive validation before accepting allocation
      */
     function setUserAllocation(AllocationPreference calldata allocationPreference) external {
@@ -283,75 +283,40 @@ contract Balancer is Ownable, ReentrancyGuard {
         _rebalanceUserPortfolio(msg.sender);
     }
 
-    /**
-     * @dev Adds deposited tokens to user's portfolio
-     * @dev Creates portfolio if first deposit, otherwise updates existing balance
-     * @param user The user making the deposit
-     * @param token The token being deposited
-     * @param amount The amount to add
-     */
-    function _addToPortfolio(address user, address token, uint256 amount) private {
-        UserPortfolio storage portfolio = s_userToPortfolio[user];
-
-        // Check if portfolio is empty (first deposit)
-        if (portfolio.tokens.length == 0) {
-            // Initialize portfolio with all tokens from allocation preference
-            AllocationPreference memory pref = s_userToAllocationPreference[user];
-
-            for (uint256 i = 0; i < pref.investmentTokens.length; i++) {
-                portfolio.tokens.push(pref.investmentTokens[i]);
-                // Set balance to amount if it's the deposit token, otherwise 0
-                if (pref.investmentTokens[i] == token) {
-                    portfolio.balances.push(amount);
-                } else {
-                    portfolio.balances.push(0);
-                }
-            }
-        } else {
-            // Find token index and update balance
-            uint256 tokenIndex = _findTokenIndex(portfolio.tokens, token);
-            portfolio.balances[tokenIndex] += amount;
-        }
-    }
-
-    /**
-     * @dev Finds the index of a token in the tokens array
-     * @param tokens Array of token addresses
-     * @param token Token to find
-     * @return index The index of the token (reverts if not found)
-     */
-    function _findTokenIndex(address[] memory tokens, address token) private pure returns (uint256 index) {
-        for (uint256 i = 0; i < tokens.length; i++) {
-            if (tokens[i] == token) {
-                return i;
-            }
-        }
-        revert Balancer__TokenNotSupported(token);
-    }
-
     function addUser() external {
         _addUser(msg.sender);
-    }
-
-    function _addUser(address _address) internal {
-        if (s_users.contains(_address)) {
-            return;
-        }
-        s_users.add(_address);
-        emit UserAdded(_address);
     }
 
     function removeUser() external {
         _removeUser(msg.sender);
     }
 
-    function _removeUser(address _address) internal {
-        if (!s_users.contains(_address)) {
-            return;
+    function setMaxSupportedTokens(uint8 maxSupportedTokens) external onlyOwner {
+        if (maxSupportedTokens != 2) {
+            revert Balancer__InvalidMaxSupportedTokens(maxSupportedTokens);
         }
-        s_users.remove(_address);
-        emit UserRemoved(_address);
+        s_maxSupportedTokens = maxSupportedTokens;
     }
+
+    function addAllowedToken(address token) external onlyOwner {
+        s_tokenToAllowed[token] = true;
+        IERC20Token(token).safeIncreaseAllowance(address(i_router), type(uint256).max);
+
+        emit InvestmentTokenAdded(token);
+    }
+
+    function removeAllowedToken(address token) external onlyOwner {
+        s_tokenToAllowed[token] = false;
+        IERC20Token(token).safeDecreaseAllowance(address(i_router), type(uint256).max);
+        emit InvestmentTokenRemoved(token);
+    }
+    /**
+     * public
+     */
+
+    /**
+     * internal
+     */
 
     /**
      * @notice Rebalances a user's portfolio to match their target allocation
@@ -415,10 +380,61 @@ contract Balancer is Ownable, ReentrancyGuard {
     }
 
     /**
+     * private
+     */
+
+    /**
+     * @dev Adds deposited tokens to user's portfolio
+     * @dev Creates portfolio if first deposit, otherwise updates existing balance
+     * @param user The user making the deposit
+     * @param token The token being deposited
+     * @param amount The amount to add
+     */
+    function _addToPortfolio(address user, address token, uint256 amount) private {
+        UserPortfolio storage portfolio = s_userToPortfolio[user];
+
+        // Check if portfolio is empty (first deposit)
+        if (portfolio.tokens.length == 0) {
+            // Initialize portfolio with all tokens from allocation preference
+            AllocationPreference memory pref = s_userToAllocationPreference[user];
+
+            for (uint256 i = 0; i < pref.investmentTokens.length; i++) {
+                portfolio.tokens.push(pref.investmentTokens[i]);
+                // Set balance to amount if it's the deposit token, otherwise 0
+                if (pref.investmentTokens[i] == token) {
+                    portfolio.balances.push(amount);
+                } else {
+                    portfolio.balances.push(0);
+                }
+            }
+        } else {
+            // Find token index and update balance
+            uint256 tokenIndex = _findTokenIndex(portfolio.tokens, token);
+            portfolio.balances[tokenIndex] += amount;
+        }
+    }
+
+    function _addUser(address _address) private {
+        if (s_users.contains(_address)) {
+            return;
+        }
+        s_users.add(_address);
+        emit UserAdded(_address);
+    }
+
+    function _removeUser(address _address) private {
+        if (!s_users.contains(_address)) {
+            return;
+        }
+        s_users.remove(_address);
+        emit UserRemoved(_address);
+    }
+
+    /**
      * @dev Executes token swaps to rebalance portfolio towards target allocations
      * @dev Only swaps tokens that exceed their target allocation + threshold
      * @dev Skips tokens that are within acceptable range (target ± threshold)
-     * 
+     *
      * @param user The address of the user whose portfolio is being rebalanced
      * @param portfolio Storage reference to the user's portfolio (updated in place)
      * @param allocations Array of target allocation percentages (18 decimals, sums to 1e18)
@@ -426,22 +442,22 @@ contract Balancer is Ownable, ReentrancyGuard {
      * @param totalValueUsd Total portfolio value in USD (18 decimals)
      * @param wethTokenIndex Index of WETH in the portfolio arrays
      * @param usdcTokenIndex Index of USDC in the portfolio arrays
-     * 
+     *
      * @return rebalanced True if any swaps were executed, false otherwise
-     * 
+     *
      * Logic:
      * 1. For each token, calculate current allocation % = (tokenValue / totalValue) * 1e18
      * 2. Check if current allocation exceeds (target + threshold)
      * 3. If yes, calculate excess USD value and swap to other token
      * 4. Portfolio balances are updated in storage via _executeSwap
-     * 
+     *
      * Example:
      * - Target: 50% WETH (5e17), threshold: 5% (5e16)
      * - Current: 60% WETH (6e17)
      * - Acceptable range: 45% - 55% (target ± threshold)
      * - 60% > 55%, so rebalancing needed
      * - Excess: 10% of portfolio value swapped WETH → USDC
-     * 
+     *
      * @custom:note Uses i_rebalanceThreshold as the acceptable drift percentage
      */
     function _executeRebalancing(
@@ -476,7 +492,6 @@ contract Balancer is Ownable, ReentrancyGuard {
             }
         }
     }
-
     /**
      * @dev Swaps tokens to rebalance portfolio
      * @param user The user whose portfolio is being rebalanced
@@ -487,6 +502,7 @@ contract Balancer is Ownable, ReentrancyGuard {
      * @param fromIndex The index of fromToken in the portfolio
      * @param toIndex The index of toToken in the portfolio
      */
+
     function _executeSwap(
         address user,
         UserPortfolio storage portfolio,
@@ -531,29 +547,24 @@ contract Balancer is Ownable, ReentrancyGuard {
         emit Swap(user, fromToken, toToken, amounts[0], amounts[1]);
     }
 
-    function setMaxSupportedTokens(uint8 maxSupportedTokens) external onlyOwner {
-        if (maxSupportedTokens != 2) {
-            revert Balancer__InvalidMaxSupportedTokens(maxSupportedTokens);
-        }
-        s_maxSupportedTokens = maxSupportedTokens;
-    }
-
-    function addAllowedToken(address token) external onlyOwner {
-        s_tokenToAllowed[token] = true;
-        IERC20Token(token).safeIncreaseAllowance(address(i_router), type(uint256).max);
-
-        emit InvestmentTokenAdded(token);
-    }
-
-    function removeAllowedToken(address token) external onlyOwner {
-        s_tokenToAllowed[token] = false;
-        IERC20Token(token).safeDecreaseAllowance(address(i_router), type(uint256).max);
-        emit InvestmentTokenRemoved(token);
-    }
-
-    /*
+    /**
      * View and pure functions
      */
+
+    /**
+     * @dev Finds the index of a token in the tokens array
+     * @param tokens Array of token addresses
+     * @param token Token to find
+     * @return index The index of the token (reverts if not found)
+     */
+    function _findTokenIndex(address[] memory tokens, address token) private pure returns (uint256 index) {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            if (tokens[i] == token) {
+                return i;
+            }
+        }
+        revert Balancer__TokenNotSupported(token);
+    }
 
     /**
      * @dev Helper function to calculate USD value of all tokens in a portfolio
