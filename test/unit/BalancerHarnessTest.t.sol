@@ -88,7 +88,7 @@ contract BalancerHarnessTest is Test {
         assertTrue(needsRebalancing);
     }
 
-    function testRebalancesWhenUsdcOutweighsWeth() public {
+    function testRebalancesWhenUsdcIsHigherThanWeth() public {
         // Deploying the harness
 
         console2.log("WETH address", address(weth));

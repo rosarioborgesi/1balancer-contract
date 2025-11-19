@@ -36,7 +36,6 @@ import {IERC20Token} from "./interfaces/IERC20Token.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {PriceConverter} from "./PriceConverter.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {console2} from "forge-std/console2.sol";
 
 contract Balancer is Ownable, ReentrancyGuard {
     /*
@@ -276,9 +275,28 @@ contract Balancer is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Check if a user's portfolio has drifted from target allocation
-     * @param user The user to check
-     * @return true if rebalancing is needed
+     * @notice Checks if a user's portfolio allocation has drifted beyond the rebalance threshold
+     * @dev Compares current token allocations (as % of total portfolio value) against target allocations
+     * @dev Returns true if ANY token's allocation drift exceeds the threshold percentage
+     *
+     * @param user The address of the user whose portfolio to check
+     * @return needsRebalance True if rebalancing is needed, false otherwise
+     *
+     * Calculation Logic:
+     * 1. Converts all token balances to USD value (18 decimals)
+     * 2. Calculates total portfolio value
+     * 3. For each token, calculates current allocation % = (tokenValue / totalValue) * 1e18
+     * 4. Compares current % vs target % - if difference > threshold, needs rebalancing
+     *
+     * Example:
+     * - Total portfolio: $6000 (3000 WETH + 3000 USDC)
+     * - Target: 50% WETH, 50% USDC
+     * - Current: 80% WETH ($4800), 20% USDC ($1200)
+     * - Drift: 30% for both tokens
+     * - If threshold is 5% (5e16), returns true
+     *
+     * @custom:security Uses Chainlink price feed for WETH valuation
+     * @custom:assumption Assumes USDC is pegged 1:1 with USD
      */
     function _needsRebalancing(address user) internal view returns (bool) {
         UserPortfolio memory portfolio = s_userToPortfolio[user];
@@ -287,42 +305,34 @@ contract Balancer is Ownable, ReentrancyGuard {
         address[] memory tokens = portfolio.tokens;
         uint256[] memory balances = portfolio.balances;
 
-        if (tokens.length == 0 || allocationPreference.allocations.length == 0) {
-            return false;
+        if (allocationPreference.allocations.length == 0) {
+            revert Balancer__AllocationNotSet();
         }
 
-        // Calculate total portfolio value in USD
-        uint256 totalPortfolioValueInUsd = 0;
-        uint256[] memory tokenValuesUsd = new uint256[](tokens.length);
-        uint256 totalValueUsd = 0;
-
-        for (uint256 i = 0; i < tokens.length; i++) {
-            if (tokens[i] == i_wethToken) {
-                // WETH - convert to USD using price feed (returns 18 decimals)
-                tokenValuesUsd[i] = balances[i].getConversionRate(i_priceFeed);
-            } else if (tokens[i] == i_usdcToken) {
-                // USDC
-                tokenValuesUsd[i] = balances[i] * 1e12;
-            } else {
-                revert Balancer__TokenNotSupported(tokens[i]);
-            }
-
-            totalValueUsd += tokenValuesUsd[i];
+        if (tokens.length == 0) {
+            revert Balancer__InvalidPortfolio();
         }
+
+        // Calculate token values and total portfolio value
+        (uint256[] memory tokenValuesUsd, uint256 totalValueUsd) =
+            _calculatePortfolioValue(portfolio.tokens, portfolio.balances);
 
         if (totalValueUsd == 0) {
             return false;
         }
 
-        // Check if any allocation drifted beyond threshold
-        for (uint256 i = 0; i < tokens.length; i++) {
+        // Check if any token's allocation has drifted beyond threshold
+        for (uint256 i = 0; i < portfolio.tokens.length; i++) {
+            // Calculate current allocation as percentage (with 18 decimals)
             uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
             uint256 targetAllocation = allocationPreference.allocations[i];
+
+            // Calculate absolute drift
             uint256 drift = currentAllocation > targetAllocation
                 ? currentAllocation - targetAllocation
                 : targetAllocation - currentAllocation;
 
-            // If drift exceeds threshold (e.g., 5%), rebalance needed
+            // Return immediately if any token exceeds threshold
             if (drift > i_rebalanceThreshold) {
                 return true;
             }
@@ -407,7 +417,13 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
     }
 
-    // Helper function to calculate portfolio value
+    /**
+     * @dev Helper function to calculate USD value of all tokens in a portfolio
+     * @param tokens Array of token addresses
+     * @param balances Array of token balances (in token's native decimals)
+     * @return tokenValuesUsd Array of token values in USD (18 decimals)
+     * @return totalValueUsd Sum of all token values in USD (18 decimals)
+     */
     function _calculatePortfolioValue(address[] memory tokens, uint256[] memory balances)
         private
         view
@@ -417,17 +433,20 @@ contract Balancer is Ownable, ReentrancyGuard {
 
         for (uint256 i = 0; i < tokens.length; i++) {
             if (tokens[i] == i_wethToken) {
+                // WETH: Convert to USD using Chainlink price feed (returns 18 decimals)
                 tokenValuesUsd[i] = balances[i].getConversionRate(i_priceFeed);
             } else if (tokens[i] == i_usdcToken) {
+                // USDC: Normalize from 6 decimals to 18 decimals (assume 1 USDC = 1 USD)
                 tokenValuesUsd[i] = balances[i] * 1e12;
             } else {
+                // Unsupported token
                 revert Balancer__TokenNotSupported(tokens[i]);
             }
+
             totalValueUsd += tokenValuesUsd[i];
         }
     }
 
-    // Helper function to execute the actual rebalancing
     function _executeRebalancing(
         address user,
         UserPortfolio storage portfolio,
@@ -440,39 +459,66 @@ contract Balancer is Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < portfolio.tokens.length; i++) {
             uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
             uint256 targetAllocation = allocations[i];
-            // calculate 5 % of the target allocation
-            uint256 fivePercentOfTargetAllocation = (targetAllocation * i_rebalanceThreshold) / PERCENTAGE_FACTOR;
-            if (currentAllocation <= (targetAllocation + fivePercentOfTargetAllocation)) {
+
+            // If the current allocation is within the rebalance threshold, skip the swap
+            uint256 rebalanceThresholdAllocation = (targetAllocation * i_rebalanceThreshold) / PERCENTAGE_FACTOR;
+            if (currentAllocation <= (targetAllocation + rebalanceThresholdAllocation)) {
                 continue;
             }
 
             uint256 excessValueUsd = tokenValuesUsd[i] - ((targetAllocation * totalValueUsd) / PERCENTAGE_FACTOR);
 
             if (portfolio.tokens[i] == i_wethToken) {
-                _swapWethToUsdc(user, portfolio, excessValueUsd, wethTokenIndex, usdcTokenIndex);
+                // Swap WETH -> USDC
+                _executeSwap(user, portfolio, excessValueUsd, i_wethToken, i_usdcToken, wethTokenIndex, usdcTokenIndex);
                 rebalanced = true;
             } else if (portfolio.tokens[i] == i_usdcToken) {
-                _swapUsdcToWeth(user, portfolio, excessValueUsd, wethTokenIndex, usdcTokenIndex);
+                // Swap USDC -> WETH
+                _executeSwap(user, portfolio, excessValueUsd, i_usdcToken, i_wethToken, usdcTokenIndex, wethTokenIndex);
                 rebalanced = true;
             }
         }
     }
 
-    // Helper for WETH -> USDC swap
-    function _swapWethToUsdc(
+    /**
+     * @dev Swaps tokens to rebalance portfolio
+     * @param user The user whose portfolio is being rebalanced
+     * @param portfolio Storage reference to the user's portfolio
+     * @param excessValueUsd The USD value (18 decimals) that needs to be swapped
+     * @param fromToken The token to swap from
+     * @param toToken The token to swap to
+     * @param fromIndex The index of fromToken in the portfolio
+     * @param toIndex The index of toToken in the portfolio
+     */
+    function _executeSwap(
         address user,
         UserPortfolio storage portfolio,
         uint256 excessValueUsd,
-        uint256 wethIndex,
-        uint256 usdcIndex
+        address fromToken,
+        address toToken,
+        uint256 fromIndex,
+        uint256 toIndex
     ) private {
-        uint256 ethPriceUsd = PriceConverter.getPrice(i_priceFeed);
-        uint256 amountToSwap = (excessValueUsd * 1e18) / ethPriceUsd;
+        // Calculate amount to swap based on the from token
+        uint256 amountToSwap;
 
+        if (fromToken == i_wethToken) {
+            // WETH -> USDC: Convert USD value to WETH amount
+            uint256 ethPriceUsd = PriceConverter.getPrice(i_priceFeed);
+            amountToSwap = (excessValueUsd * 1e18) / ethPriceUsd;
+        } else if (fromToken == i_usdcToken) {
+            // USDC -> WETH: Convert from 18 decimals to 6 decimals
+            amountToSwap = excessValueUsd / 1e12;
+        } else {
+            revert Balancer__TokenNotSupported(fromToken);
+        }
+
+        // Set up swap path
         address[] memory path = new address[](2);
-        path[0] = i_wethToken;
-        path[1] = i_usdcToken;
+        path[0] = fromToken;
+        path[1] = toToken;
 
+        // Execute swap
         uint256[] memory amounts = i_router.swapExactTokensForTokens({
             amountIn: amountToSwap,
             amountOutMin: 1,
@@ -481,38 +527,11 @@ contract Balancer is Ownable, ReentrancyGuard {
             deadline: block.timestamp
         });
 
-        portfolio.balances[wethIndex] -= amounts[0];
-        portfolio.balances[usdcIndex] += amounts[1];
+        // Update balances
+        portfolio.balances[fromIndex] -= amounts[0];
+        portfolio.balances[toIndex] += amounts[1];
 
-        emit Swap(user, i_wethToken, i_usdcToken, amounts[0], amounts[1]);
-    }
-
-    // Helper for USDC -> WETH swap
-    function _swapUsdcToWeth(
-        address user,
-        UserPortfolio storage portfolio,
-        uint256 excessValueUsd,
-        uint256 wethIndex,
-        uint256 usdcIndex
-    ) private {
-        uint256 amountToSwap = excessValueUsd / 1e12;
-
-        address[] memory path = new address[](2);
-        path[0] = i_usdcToken;
-        path[1] = i_wethToken;
-
-        uint256[] memory amounts = i_router.swapExactTokensForTokens({
-            amountIn: amountToSwap,
-            amountOutMin: 1,
-            path: path,
-            to: address(this),
-            deadline: block.timestamp
-        });
-
-        portfolio.balances[usdcIndex] -= amounts[0];
-        portfolio.balances[wethIndex] += amounts[1];
-
-        emit Swap(user, i_usdcToken, i_wethToken, amounts[0], amounts[1]);
+        emit Swap(user, fromToken, toToken, amounts[0], amounts[1]);
     }
 
     function setMaxSupportedTokens(uint8 maxSupportedTokens) external onlyOwner {
