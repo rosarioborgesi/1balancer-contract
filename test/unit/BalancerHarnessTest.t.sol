@@ -20,7 +20,7 @@ contract BalancerHarnessTest is Test {
     AggregatorV3Interface public priceFeed;
 
     uint8 public constant MAX_SUPPORTED_TOKENS = 2;
-    uint8 public constant REBALANCE_THRESHOLD = 5;
+    uint256 public constant REBALANCE_THRESHOLD = 5 * 1e16; // 5%
 
     address owner;
     address USER = makeAddr("user");

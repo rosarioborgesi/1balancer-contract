@@ -30,7 +30,7 @@ contract BalancerHarnessForkTest is Test {
     AggregatorV3Interface public constant priceFeed = AggregatorV3Interface(CHAINLINK_FEED_ETH_USD_MAINNET);
 
     uint256 constant STARTING_BALANCE = 100 ether;
-    uint8 constant REBALANCE_THRESHOLD = 5;
+    uint256 constant REBALANCE_THRESHOLD = 5 * 1e16; // 5%
     uint8 constant MAX_SUPPORTED_TOKENS = 2;
 
     using PriceConverter for uint256;

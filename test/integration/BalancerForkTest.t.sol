@@ -25,7 +25,7 @@ contract BalancerForkTest is Test {
     IUniswapV2Pair public constant pair = IUniswapV2Pair(UNISWAP_V2_PAIR_USDC_WETH_MAINNET);
 
     uint256 constant STARTING_BALANCE = 100 ether;
-    uint8 constant REBALANCE_THRESHOLD = 5;
+    uint256 constant REBALANCE_THRESHOLD = 5 * 1e16; // 5%
     uint8 constant MAX_SUPPORTED_TOKENS = 2;
 
     address user = makeAddr("user");

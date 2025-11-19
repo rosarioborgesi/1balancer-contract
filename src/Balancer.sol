@@ -52,6 +52,8 @@ contract Balancer is Ownable, ReentrancyGuard {
     error Balancer__InputNotWeth();
     error Balancer__MsgValueAmountMismatch(uint256 amount, uint256 msgValue);
     error Balancer__InvalidPortfolio();
+    error Balancer__InvalidRebalanceThreshold(uint256 rebalanceThreshold);
+    error Balancer__InvalidMaxSupportedTokens(uint256 maxSupportedTokens);
 
     /*
      * Libraries
@@ -128,6 +130,15 @@ contract Balancer is Ownable, ReentrancyGuard {
         i_usdcToken = usdcToken;
         i_router = IUniswapV2Router02(router);
         i_priceFeed = AggregatorV3Interface(priceFeed);
+
+        if (rebalanceThreshold < 1 * 1e16 || rebalanceThreshold > 1 * 1e17) {
+            // Rebalance threshold Min 1% Max 10%
+            revert Balancer__InvalidRebalanceThreshold(rebalanceThreshold);
+        }
+        if (maxSupportedTokens != 2) {
+            // Max 2 tokens
+            revert Balancer__InvalidMaxSupportedTokens(maxSupportedTokens);
+        }
         i_rebalanceThreshold = rebalanceThreshold;
         s_maxSupportedTokens = maxSupportedTokens;
     }
@@ -293,7 +304,7 @@ contract Balancer is Ownable, ReentrancyGuard {
                 // USDC
                 tokenValuesUsd[i] = balances[i] * 1e12;
             } else {
-                tokenValuesUsd[i] = balances[i];
+                revert Balancer__TokenNotSupported(tokens[i]);
             }
 
             totalValueUsd += tokenValuesUsd[i];
@@ -321,134 +332,193 @@ contract Balancer is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Rebalance a user's portfolio to match their target allocation
+     * @notice Rebalances a user's portfolio to match their target allocation
+     * @dev Swaps tokens to bring allocations within the rebalance threshold
+     * @dev Only supports two-token portfolios (WETH and USDC) currently
+     * @param user The address of the user whose portfolio should be rebalanced
+     *
+     * Requirements:
+     * - User must have set an allocation preference
+     * - User must have a valid portfolio with matching token/balance arrays
+     * - Portfolio must contain exactly 2 tokens (WETH and USDC)
+     * - Tokens must have sufficient balance for swaps
+     * - Router must have approval to spend tokens
+     *
+     * Emits:
+     * - {Swap} event for each token swap performed
+     * - {PortfolioUpdated} event only if rebalancing occurred
+     *
+     * @custom:security This function assumes the router has unlimited approval
+     * @custom:limitation Only works with WETH/USDC pairs currently
      */
     function _rebalanceUserPortfolio(address user) internal {
         AllocationPreference memory allocationPreference = s_userToAllocationPreference[user];
-        uint256[] memory allocations = allocationPreference.allocations;
 
-        UserPortfolio memory portfolio = s_userToPortfolio[user];
-        address[] memory tokens = portfolio.tokens;
-        uint256[] memory balances = portfolio.balances;
-
-        if (allocations.length == 0) {
+        if (allocationPreference.allocations.length == 0) {
             revert Balancer__AllocationNotSet();
         }
 
+        UserPortfolio storage portfolio = s_userToPortfolio[user];
+
         if (
-            tokens.length == 0 || balances.length == 0 || allocations.length != tokens.length
-                || allocations.length != balances.length
+            portfolio.tokens.length == 0 || portfolio.balances.length == 0
+                || allocationPreference.allocations.length != portfolio.tokens.length
+                || allocationPreference.allocations.length != portfolio.balances.length
         ) {
             revert Balancer__InvalidPortfolio();
         }
 
-        // get the index of the USDC token
-        uint256 usdcTokenIndex = 0;
-        uint256 wethTokenIndex = 0;
+        // Find token indices
+        (uint256 wethTokenIndex, uint256 usdcTokenIndex) = _findTokenIndices(portfolio.tokens);
+
+        // Calculate values - returns (tokenValuesUsd array, totalValueUsd)
+        (uint256[] memory tokenValuesUsd, uint256 totalValueUsd) =
+            _calculatePortfolioValue(portfolio.tokens, portfolio.balances);
+
+        if (totalValueUsd == 0) return;
+
+        bool rebalanced = _executeRebalancing(
+            user,
+            portfolio,
+            allocationPreference.allocations,
+            tokenValuesUsd,
+            totalValueUsd,
+            wethTokenIndex,
+            usdcTokenIndex
+        );
+
+        if (rebalanced) {
+            emit PortfolioUpdated(user, portfolio);
+        }
+    }
+
+    // Helper function to find token indices
+    function _findTokenIndices(address[] memory tokens) private view returns (uint256 wethIndex, uint256 usdcIndex) {
+        wethIndex = type(uint256).max;
+        usdcIndex = type(uint256).max;
+
         for (uint256 i = 0; i < tokens.length; i++) {
-            if (tokens[i] == i_usdcToken) {
-                usdcTokenIndex = i;
-                continue;
-            }
-            if (tokens[i] == i_wethToken) {
-                wethTokenIndex = i;
-                continue;
-            }
+            if (tokens[i] == i_wethToken) wethIndex = i;
+            else if (tokens[i] == i_usdcToken) usdcIndex = i;
         }
 
-        uint256[] memory tokenValuesUsd = new uint256[](tokens.length);
-        uint256 totalValueUsd = 0;
+        if (wethIndex == type(uint256).max || usdcIndex == type(uint256).max) {
+            revert Balancer__InvalidPortfolio();
+        }
+    }
+
+    // Helper function to calculate portfolio value
+    function _calculatePortfolioValue(address[] memory tokens, uint256[] memory balances)
+        private
+        view
+        returns (uint256[] memory tokenValuesUsd, uint256 totalValueUsd)
+    {
+        tokenValuesUsd = new uint256[](tokens.length);
 
         for (uint256 i = 0; i < tokens.length; i++) {
             if (tokens[i] == i_wethToken) {
-                // WETH - convert to USD using price feed (returns 18 decimals)
-                uint256 wethValueInUsd = balances[i].getConversionRate(i_priceFeed);
-                console2.log("WETH value in USD", wethValueInUsd);
-                tokenValuesUsd[i] = wethValueInUsd;
-
-                totalValueUsd += wethValueInUsd;
+                tokenValuesUsd[i] = balances[i].getConversionRate(i_priceFeed);
             } else if (tokens[i] == i_usdcToken) {
-                // USDC
                 tokenValuesUsd[i] = balances[i] * 1e12;
-                totalValueUsd += tokenValuesUsd[i];
             } else {
-                tokenValuesUsd[i] = balances[i];
-                totalValueUsd += tokenValuesUsd[i];
+                revert Balancer__TokenNotSupported(tokens[i]);
             }
-            console2.log("Total value in USD", totalValueUsd);
+            totalValueUsd += tokenValuesUsd[i];
         }
+    }
 
-        for (uint256 i = 0; i < tokens.length; i++) {
-            if (tokens[i] == i_wethToken) {
-                // WETH -> USDC
-                uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
-                uint256 targetAllocation = allocations[i];
-                console2.log("WETH Current Allocation", currentAllocation);
-                console2.log("WETH Target Allocation", targetAllocation);
-                if (currentAllocation > targetAllocation) {
-                    uint256 percentageToSwap = currentAllocation - targetAllocation;
-                    console2.log("WETH Percentage to swap", percentageToSwap);
+    // Helper function to execute the actual rebalancing
+    function _executeRebalancing(
+        address user,
+        UserPortfolio storage portfolio,
+        uint256[] memory allocations,
+        uint256[] memory tokenValuesUsd,
+        uint256 totalValueUsd,
+        uint256 wethTokenIndex,
+        uint256 usdcTokenIndex
+    ) private returns (bool rebalanced) {
+        for (uint256 i = 0; i < portfolio.tokens.length; i++) {
+            uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
+            uint256 targetAllocation = allocations[i];
+            // calculate 5 % of the target allocation
+            uint256 fivePercentOfTargetAllocation = (targetAllocation * i_rebalanceThreshold) / PERCENTAGE_FACTOR;
+            if (currentAllocation <= (targetAllocation + fivePercentOfTargetAllocation)) {
+                continue;
+            }
 
-                    uint256 amountToSwap = (balances[i] * percentageToSwap) / PERCENTAGE_FACTOR;
-                    console2.log("WETH Balance", balances[i]);
-                    console2.log("WETH Amount to swap", amountToSwap);
+            uint256 excessValueUsd = tokenValuesUsd[i] - ((targetAllocation * totalValueUsd) / PERCENTAGE_FACTOR);
 
-                    address[] memory path = new address[](2);
-                    path[0] = i_wethToken;
-                    path[1] = i_usdcToken;
-                    uint256[] memory amounts = i_router.swapExactTokensForTokens({
-                        amountIn: amountToSwap,
-                        amountOutMin: 1,
-                        path: path,
-                        to: address(this),
-                        deadline: block.timestamp
-                    });
-                    console2.log("Amounts 0 (WETH)", amounts[0]);
-                    console2.log("Amounts 1 (USDC)", amounts[1]);
-                    // Update the portfolio balances
-                    //WETH
-                    portfolio.balances[i] = balances[i] - amounts[0];
-                    //USDC
-                    portfolio.balances[usdcTokenIndex] = amounts[1] + balances[usdcTokenIndex];
-                } else {
-                    continue;
-                }
-            } else if (tokens[i] == i_usdcToken) {
-                // USDC -> WETH
-                uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
-                uint256 targetAllocation = allocations[i];
-                if (currentAllocation > targetAllocation) {
-                    uint256 percentageToSwap = currentAllocation - targetAllocation;
-
-                    uint256 amountToSwap = (balances[i] * percentageToSwap) / PERCENTAGE_FACTOR;
-                    console2.log("Amount to swap", amountToSwap);
-
-                    address[] memory path = new address[](2);
-                    path[0] = i_usdcToken;
-                    path[1] = i_wethToken;
-                    uint256[] memory amounts = i_router.swapExactTokensForTokens({
-                        amountIn: amountToSwap,
-                        amountOutMin: 1,
-                        path: path,
-                        to: address(this),
-                        deadline: block.timestamp
-                    });
-                    console2.log("Amounts 0 (USDC)", amounts[0]);
-                    console2.log("Amounts 1 (WETH)", amounts[1]);
-                    // Update the portfolio balances
-                    //WETH
-                    portfolio.balances[wethTokenIndex] = amounts[1] + balances[wethTokenIndex];
-                    //USDC
-                    portfolio.balances[i] = balances[i] - amounts[0];
-                } else {
-                    continue;
-                }
+            if (portfolio.tokens[i] == i_wethToken) {
+                _swapWethToUsdc(user, portfolio, excessValueUsd, wethTokenIndex, usdcTokenIndex);
+                rebalanced = true;
+            } else if (portfolio.tokens[i] == i_usdcToken) {
+                _swapUsdcToWeth(user, portfolio, excessValueUsd, wethTokenIndex, usdcTokenIndex);
+                rebalanced = true;
             }
         }
-        emit PortfolioUpdated(user, portfolio);
+    }
+
+    // Helper for WETH -> USDC swap
+    function _swapWethToUsdc(
+        address user,
+        UserPortfolio storage portfolio,
+        uint256 excessValueUsd,
+        uint256 wethIndex,
+        uint256 usdcIndex
+    ) private {
+        uint256 ethPriceUsd = PriceConverter.getPrice(i_priceFeed);
+        uint256 amountToSwap = (excessValueUsd * 1e18) / ethPriceUsd;
+
+        address[] memory path = new address[](2);
+        path[0] = i_wethToken;
+        path[1] = i_usdcToken;
+
+        uint256[] memory amounts = i_router.swapExactTokensForTokens({
+            amountIn: amountToSwap,
+            amountOutMin: 1,
+            path: path,
+            to: address(this),
+            deadline: block.timestamp
+        });
+
+        portfolio.balances[wethIndex] -= amounts[0];
+        portfolio.balances[usdcIndex] += amounts[1];
+
+        emit Swap(user, i_wethToken, i_usdcToken, amounts[0], amounts[1]);
+    }
+
+    // Helper for USDC -> WETH swap
+    function _swapUsdcToWeth(
+        address user,
+        UserPortfolio storage portfolio,
+        uint256 excessValueUsd,
+        uint256 wethIndex,
+        uint256 usdcIndex
+    ) private {
+        uint256 amountToSwap = excessValueUsd / 1e12;
+
+        address[] memory path = new address[](2);
+        path[0] = i_usdcToken;
+        path[1] = i_wethToken;
+
+        uint256[] memory amounts = i_router.swapExactTokensForTokens({
+            amountIn: amountToSwap,
+            amountOutMin: 1,
+            path: path,
+            to: address(this),
+            deadline: block.timestamp
+        });
+
+        portfolio.balances[usdcIndex] -= amounts[0];
+        portfolio.balances[wethIndex] += amounts[1];
+
+        emit Swap(user, i_usdcToken, i_wethToken, amounts[0], amounts[1]);
     }
 
     function setMaxSupportedTokens(uint8 maxSupportedTokens) external onlyOwner {
+        if (maxSupportedTokens != 2) {
+            revert Balancer__InvalidMaxSupportedTokens(maxSupportedTokens);
+        }
         s_maxSupportedTokens = maxSupportedTokens;
     }
 
