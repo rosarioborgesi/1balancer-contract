@@ -157,4 +157,99 @@ contract BalancerForkTest is Test {
         assertGt(portfolio.balances[0], 1 * 1e17, "USDC balance is not greater than 1e17 wei");
         assertEq(portfolio.balances[1], 5_000 * 1e6, "WETH balance is not greater then 1 USDC");
     }
+
+    /*////////////////////////////////////////////////////////////// 
+                            WITHDRAW
+    //////////////////////////////////////////////////////////////*/
+
+    function testWithdrawIfUserAllocationIsSetAndUserDepositedWeth() public {
+        // Creating AllocationPreference
+        address[] memory investmentTokens = new address[](2);
+        investmentTokens[0] = address(weth);
+        investmentTokens[1] = address(usdc);
+
+        uint256[] memory allocations = new uint256[](2);
+        allocations[0] = 5 * 10 ** 17; // 50%
+        allocations[1] = 5 * 10 ** 17; // 50%
+
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
+
+        vm.startPrank(user);
+        balancer.setUserAllocation(allocationPreference);
+        balancer.deposit{value: 1 ether}(address(weth), 1 ether);
+        vm.stopPrank();
+
+        Balancer.UserPortfolio memory portfolio = balancer.getUserToPortfolio(user);
+
+        assertEq(portfolio.tokens.length, 2, "Portfolio tokens length is not 2");
+        assertEq(portfolio.tokens[0], address(weth), "Portfolio token 0 is not WETH");
+        assertEq(portfolio.tokens[1], address(usdc), "Portfolio token 1 is not USDC");
+        assertGt(portfolio.balances[0], 0, "Portfolio balance WETH is greater than 0");
+        assertGt(portfolio.balances[1], 0, "Portfolio balance USDC is greater than 0");
+
+        uint256 wethUserBalanceBeforeWithdraw = weth.balanceOf(user);
+        console2.log("WETH user balance before withdraw:", wethUserBalanceBeforeWithdraw);
+        assertEq(wethUserBalanceBeforeWithdraw, 0, "WETH user balance should be 0 before withdraw");
+        uint256 usdcUserBalanceBeforeWithdraw = usdc.balanceOf(user);
+        console2.log("USDC user balance before withdraw:", usdcUserBalanceBeforeWithdraw);
+        assertEq(usdcUserBalanceBeforeWithdraw, 0, "USDC user balance should be 0 before withdraw");
+
+        uint256 wethBalancerBalanceBeforeWithdraw = weth.balanceOf(address(balancer));
+        console2.log("WETH balancer balance before withdraw:", wethBalancerBalanceBeforeWithdraw);
+        assertEq(wethBalancerBalanceBeforeWithdraw, 5e17, "WETH balancer balance should be 0.5 WETH before withdraw");
+        uint256 usdcBalancerBalanceBeforeWithdraw = usdc.balanceOf(address(balancer));
+        console2.log("USDC balancer balance before withdraw:", usdcBalancerBalanceBeforeWithdraw);
+        assertGt(
+            usdcBalancerBalanceBeforeWithdraw, 0, "USDC balancer balance should be greater than 0 USDC before withdraw"
+        );
+
+        vm.startPrank(user);
+        balancer.withdraw();
+        vm.stopPrank();
+
+        uint256 wethUserBalanceAfterWithdraw = weth.balanceOf(user);
+        console2.log("WETH user balance after withdraw:", wethUserBalanceAfterWithdraw);
+        assertEq(
+            wethUserBalanceAfterWithdraw,
+            wethBalancerBalanceBeforeWithdraw,
+            "WETH user balance after withdraw should be the same as the balancer balance before withdraw"
+        );
+        uint256 usdcUserBalanceAfterWithdraw = usdc.balanceOf(user);
+        console2.log("USDC user balance after withdraw:", usdcUserBalanceAfterWithdraw);
+        assertEq(
+            usdcUserBalanceAfterWithdraw,
+            usdcBalancerBalanceBeforeWithdraw,
+            "USDC user balance after withdraw should be the same as the balancer balance before withdraw"
+        );
+
+        uint256 wethBalancerBalanceAfterWithdraw = weth.balanceOf(address(balancer));
+        console2.log("WETH balancer balance after withdraw:", wethBalancerBalanceAfterWithdraw);
+        assertEq(wethBalancerBalanceAfterWithdraw, 0, "WETH balancer balance should be 0 after withdraw");
+        uint256 usdcBalancerBalanceAfterWithdraw = usdc.balanceOf(address(balancer));
+        console2.log("USDC balancer balance after withdraw:", usdcBalancerBalanceAfterWithdraw);
+        assertEq(usdcBalancerBalanceAfterWithdraw, 0, "USDC balancer balance should be 0 after withdraw");
+    }
+
+    function testWithdrawRevertsIfUserHasNotDeposited() public {
+        // Creating AllocationPreference
+        address[] memory investmentTokens = new address[](2);
+        investmentTokens[0] = address(weth);
+        investmentTokens[1] = address(usdc);
+
+        uint256[] memory allocations = new uint256[](2);
+        allocations[0] = 5 * 10 ** 17; // 50%
+        allocations[1] = 5 * 10 ** 17; // 50%
+
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
+
+        vm.startPrank(user);
+        balancer.setUserAllocation(allocationPreference);
+        vm.expectRevert(abi.encodeWithSelector(Balancer.Balancer__InvalidPortfolio.selector, user));
+        balancer.withdraw();
+        vm.stopPrank();
+
+        
+    }
 }

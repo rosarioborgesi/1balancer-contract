@@ -51,7 +51,7 @@ contract Balancer is Ownable, ReentrancyGuard {
     error Balancer__ZeroAmount();
     error Balancer__InputNotWeth();
     error Balancer__MsgValueAmountMismatch(uint256 amount, uint256 msgValue);
-    error Balancer__InvalidPortfolio();
+    error Balancer__InvalidPortfolio(address user);
     error Balancer__InvalidRebalanceThreshold(uint256 rebalanceThreshold);
     error Balancer__InvalidMaxSupportedTokens(uint256 maxSupportedTokens);
     error Balancer__UpkeepNotNeeded();
@@ -119,10 +119,11 @@ contract Balancer is Ownable, ReentrancyGuard {
     event UserAdded(address indexed user);
     event UserRemoved(address indexed user);
     event UpkeepPerformed(uint256 blockTimestamp);
+    event Withdrawal(address indexed user);
+
     /**
      * Constructor
      */
-
     constructor(
         address wethToken,
         address usdcToken,
@@ -318,6 +319,43 @@ contract Balancer is Ownable, ReentrancyGuard {
         _rebalanceUserPortfolio(msg.sender);
     }
 
+    function withdraw() external nonReentrant {
+        if (!s_users.contains(msg.sender)) {
+            revert Balancer__UserNotAdded(msg.sender);
+        }
+
+        UserPortfolio memory portfolio = s_userToPortfolio[msg.sender];
+
+        if (portfolio.tokens.length == 0 || portfolio.balances.length == 0) {
+            revert Balancer__InvalidPortfolio(msg.sender);
+        }
+
+        // Check if all balances are zero
+        bool hasBalance = false;
+        for (uint256 i = 0; i < portfolio.balances.length; i++) {
+            if (portfolio.balances[i] > 0) {
+                hasBalance = true;
+                break;
+            }
+        }
+
+        if (!hasBalance) {
+            revert Balancer__InvalidPortfolio(msg.sender);
+        }
+
+        delete s_userToPortfolio[msg.sender];
+        _removeUser(msg.sender);
+
+        for (uint256 i = 0; i < portfolio.tokens.length; i++) {
+            if (portfolio.balances[i] == 0) {
+                continue;
+            }
+            IERC20Token(portfolio.tokens[i]).safeTransfer(msg.sender, portfolio.balances[i]);
+        }
+
+        emit Withdrawal(msg.sender);
+    }
+
     function addUser() external {
         _addUser(msg.sender);
     }
@@ -455,7 +493,7 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
 
         if (tokens.length == 0) {
-            revert Balancer__InvalidPortfolio();
+            revert Balancer__InvalidPortfolio(user);
         }
 
         // Calculate token values and total portfolio value
@@ -520,11 +558,11 @@ contract Balancer is Ownable, ReentrancyGuard {
                 || allocationPreference.allocations.length != portfolio.tokens.length
                 || allocationPreference.allocations.length != portfolio.balances.length
         ) {
-            revert Balancer__InvalidPortfolio();
+            revert Balancer__InvalidPortfolio(user);
         }
 
         // Find token indices
-        (uint256 wethTokenIndex, uint256 usdcTokenIndex) = _findTokenIndices(portfolio.tokens);
+        (uint256 wethTokenIndex, uint256 usdcTokenIndex) = _findTokenIndices(portfolio.tokens, user);
 
         // Calculate values - returns (tokenValuesUsd array, totalValueUsd)
         (uint256[] memory tokenValuesUsd, uint256 totalValueUsd) =
@@ -660,6 +698,7 @@ contract Balancer is Ownable, ReentrancyGuard {
             }
         }
     }
+
     /**
      * @dev Swaps tokens to rebalance portfolio
      * @param user The user whose portfolio is being rebalanced
@@ -670,7 +709,6 @@ contract Balancer is Ownable, ReentrancyGuard {
      * @param fromIndex The index of fromToken in the portfolio
      * @param toIndex The index of toToken in the portfolio
      */
-
     function _executeSwap(
         address user,
         UserPortfolio storage portfolio,
@@ -761,7 +799,7 @@ contract Balancer is Ownable, ReentrancyGuard {
     }
 
     // Helper function to find token indices
-    function _findTokenIndices(address[] memory tokens) private view returns (uint256 wethIndex, uint256 usdcIndex) {
+    function _findTokenIndices(address[] memory tokens, address user) private view returns (uint256 wethIndex, uint256 usdcIndex) {
         wethIndex = type(uint256).max;
         usdcIndex = type(uint256).max;
 
@@ -771,7 +809,7 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
 
         if (wethIndex == type(uint256).max || usdcIndex == type(uint256).max) {
-            revert Balancer__InvalidPortfolio();
+            revert Balancer__InvalidPortfolio(user);
         }
     }
 
