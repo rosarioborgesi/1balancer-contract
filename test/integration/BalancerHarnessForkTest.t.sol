@@ -32,6 +32,7 @@ contract BalancerHarnessForkTest is Test {
     uint256 constant STARTING_BALANCE = 100 ether;
     uint256 constant REBALANCE_THRESHOLD = 5 * 1e16; // 5%
     uint8 constant MAX_SUPPORTED_TOKENS = 2;
+    uint256 constant INTERVAL = 30; // 30 seconds
 
     using PriceConverter for uint256;
 
@@ -43,7 +44,13 @@ contract BalancerHarnessForkTest is Test {
         vm.deal(user, STARTING_BALANCE);
 
         harness = new BalancerHarness(
-            address(weth), address(usdc), address(router), CHAINLINK_FEED_ETH_USD_MAINNET, REBALANCE_THRESHOLD, 2
+            address(weth),
+            address(usdc),
+            address(router),
+            CHAINLINK_FEED_ETH_USD_MAINNET,
+            REBALANCE_THRESHOLD,
+            MAX_SUPPORTED_TOKENS,
+            INTERVAL
         );
 
         harness.addAllowedToken(address(weth));
@@ -310,5 +317,97 @@ contract BalancerHarnessForkTest is Test {
         assertEq(wethAfter, wethBefore, "WETH balance should be the same");
         // 2. USDC balance should be the same
         assertEq(usdcAfter, usdcBefore, "USDC balance should be the same");
+    }
+
+    /*////////////////////////////////////////////////////////////// 
+                            PERFORM UPKEEP
+    //////////////////////////////////////////////////////////////*/
+
+    function testPerformUpkeepCanOnlyRunIfCheckUpkeepIsTrue() public {
+        uint256 WETH_AMOUNT = 100000000000000 wei;
+        uint256 USDC_AMOUNT = 1000 * 1e6;
+
+        vm.warp(block.timestamp + INTERVAL + 1);
+        vm.roll(block.number + 1);
+
+        // Depositing 1 WETH and 1 USDC to the contract
+        deal(address(weth), address(harness), WETH_AMOUNT);
+        deal(address(usdc), address(harness), USDC_AMOUNT);
+
+        // Creating AllocationPreference
+        address[] memory investmentTokens = new address[](2);
+        investmentTokens[0] = address(weth);
+        investmentTokens[1] = address(usdc);
+
+        uint256[] memory allocations = new uint256[](2);
+        allocations[0] = 5 * 10 ** 17; // 50%
+        allocations[1] = 5 * 10 ** 17; // 50%
+
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
+
+        // Creating User Portfolio
+        address[] memory tokens = new address[](2);
+        tokens[0] = address(weth);
+        tokens[1] = address(usdc);
+
+        uint256[] memory balances = new uint256[](2);
+        balances[0] = WETH_AMOUNT; // equivalent to 0.0001 WETH approximately 0.3 USD so less then 1% of the portfolio value
+        balances[1] = USDC_AMOUNT; // 1000 USDC so more then 99% of the portfolio value
+
+        vm.startPrank(user);
+        harness.setUserAllocation(allocationPreference);
+        harness.setTestPortfolio(user, tokens, balances);
+        vm.stopPrank();
+
+        // Act / Assert
+        harness.performUpkeep("");
+    }
+
+    function testPerformUpkeepRevertsIfCheckUpkeepIsFalse() public {
+        uint256 WETH_AMOUNT = 1 ether;
+        uint256 USDC_AMOUNT = PriceConverter.getConversionRate(WETH_AMOUNT, priceFeed) / 1e12;
+
+        // Depositing 1 WETH and 1 USDC to the contract
+        deal(address(weth), address(harness), WETH_AMOUNT);
+        deal(address(usdc), address(harness), USDC_AMOUNT);
+
+        // Creating User Portfolio
+        address[] memory tokens = new address[](2);
+        tokens[0] = address(weth);
+        tokens[1] = address(usdc);
+
+        uint256[] memory balances = new uint256[](2);
+        balances[0] = WETH_AMOUNT;
+        balances[1] = USDC_AMOUNT;
+
+        address[] memory investmentTokens = new address[](2);
+        investmentTokens[0] = address(weth);
+        investmentTokens[1] = address(usdc);
+
+        uint256[] memory allocations = new uint256[](2);
+        allocations[0] = 5 * 10 ** 17; // 50%
+        allocations[1] = 5 * 10 ** 17; // 50%
+
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
+
+        // Check balances BEFORE rebalancing
+        uint256 wethBefore = weth.balanceOf(address(harness));
+        uint256 usdcBefore = usdc.balanceOf(address(harness));
+
+        console2.log("WETH balance before rebalancing", wethBefore);
+        console2.log("USDC balance before rebalancing", usdcBefore);
+
+        // Rebalancing the user portfolio
+        vm.startPrank(user);
+        harness.setUserAllocation(allocationPreference);
+        harness.setTestPortfolio(user, tokens, balances);
+        harness.rebalanceUserPortfolio();
+        vm.stopPrank();
+
+        // Act / Assert
+        vm.expectRevert(abi.encodeWithSelector(Balancer.Balancer__UpkeepNotNeeded.selector));
+        harness.performUpkeep("");
     }
 }

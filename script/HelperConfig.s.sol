@@ -35,6 +35,7 @@ contract HelperConfig is Script {
         address usdc; // USDC address
         address router; // Uniswap V2 router address
         address account; // account address to use for deployment
+        uint256 interval; // interval in seconds
     }
 
     NetworkConfig public activeNetworkConfig;
@@ -66,7 +67,8 @@ contract HelperConfig is Script {
             weth: WETH_SEPOLIA,
             usdc: USDC_SEPOLIA,
             router: UNISWAP_V2_ROUTER_02_SEPOLIA,
-            account: 0x01BF49D75f2b73A2FDEFa7664AEF22C86c5Be3df
+            account: 0x01BF49D75f2b73A2FDEFa7664AEF22C86c5Be3df,
+            interval: 30 // 30 seconds
         });
     }
 
@@ -77,7 +79,8 @@ contract HelperConfig is Script {
             weth: WETH_MAINNET,
             usdc: USDC_MAINNET,
             router: UNISWAP_V2_ROUTER_02_MAINNET,
-            account: 0x01BF49D75f2b73A2FDEFa7664AEF22C86c5Be3df
+            account: 0x01BF49D75f2b73A2FDEFa7664AEF22C86c5Be3df,
+            interval: 3600 // 1 hour in seconds
         });
     }
 
@@ -97,7 +100,8 @@ contract HelperConfig is Script {
             weth: address(weth),
             usdc: address(usdc),
             router: UNISWAP_V2_ROUTER_02_MAINNET, // TODO: need to deploy a mock router for anvil
-            account: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+            account: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266,
+            interval: 30 // 30 seconds
         });
 
         return anvilConfig;

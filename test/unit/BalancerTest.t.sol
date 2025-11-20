@@ -16,6 +16,7 @@ import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interf
 contract BalancerTest is Test {
     Balancer public balancer;
     HelperConfig public helperConfig;
+    HelperConfig.NetworkConfig public config;
 
     WETH public weth;
     USDC public usdc;
@@ -35,7 +36,7 @@ contract BalancerTest is Test {
         DeployBalancer deployer = new DeployBalancer();
         (balancer, helperConfig) = deployer.deployContract();
 
-        HelperConfig.NetworkConfig memory config = helperConfig.getConfig();
+        config = helperConfig.getConfig();
         priceFeed = AggregatorV3Interface(config.priceFeed);
         weth = WETH(payable(config.weth));
         usdc = USDC(payable(config.usdc));

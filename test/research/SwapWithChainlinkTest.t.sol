@@ -3,7 +3,6 @@ pragma solidity ^0.8.30;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import {IERC20} from "../../src/interfaces/IERC20.sol";
 import {IWETH} from "../../src/interfaces/IWETH.sol";
 import {IUSDC} from "../../src/interfaces/IUSDC.sol";
 import {IUniswapV2Router02} from "../../src/interfaces/uniswap-v2/IUniswapV2Router02.sol";

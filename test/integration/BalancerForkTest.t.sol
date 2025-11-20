@@ -27,6 +27,7 @@ contract BalancerForkTest is Test {
     uint256 constant STARTING_BALANCE = 100 ether;
     uint256 constant REBALANCE_THRESHOLD = 5 * 1e16; // 5%
     uint8 constant MAX_SUPPORTED_TOKENS = 2;
+    uint256 constant INTERVAL = 30; // 30 seconds
 
     address user = makeAddr("user");
 
@@ -35,7 +36,13 @@ contract BalancerForkTest is Test {
         vm.deal(user, STARTING_BALANCE);
 
         balancer = new Balancer(
-            address(weth), address(usdc), address(router), CHAINLINK_FEED_ETH_USD_MAINNET, REBALANCE_THRESHOLD, 2
+            address(weth),
+            address(usdc),
+            address(router),
+            CHAINLINK_FEED_ETH_USD_MAINNET,
+            REBALANCE_THRESHOLD,
+            MAX_SUPPORTED_TOKENS,
+            INTERVAL
         );
 
         balancer.addAllowedToken(address(weth));

@@ -19,7 +19,13 @@ contract DeployBalancer is Script {
 
         vm.startBroadcast(config.account);
         Balancer balancer = new Balancer(
-            config.weth, config.usdc, config.router, config.priceFeed, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS
+            config.weth,
+            config.usdc,
+            config.router,
+            config.priceFeed,
+            REBALANCE_THRESHOLD,
+            MAX_SUPPORTED_TOKENS,
+            config.interval
         );
         vm.stopBroadcast();
 

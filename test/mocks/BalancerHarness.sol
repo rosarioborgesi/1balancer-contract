@@ -10,8 +10,9 @@ contract BalancerHarness is Balancer {
         address router,
         address priceFeed,
         uint256 rebalanceThreshold,
-        uint8 maxSupportedTokens
-    ) Balancer(weth, usdc, router, priceFeed, rebalanceThreshold, maxSupportedTokens) {}
+        uint8 maxSupportedTokens,
+        uint256 interval
+    ) Balancer(weth, usdc, router, priceFeed, rebalanceThreshold, maxSupportedTokens, interval) {}
 
     // Add test helper to set portfolio directly
     function setTestPortfolio(address user, address[] memory tokens, uint256[] memory balances) external {

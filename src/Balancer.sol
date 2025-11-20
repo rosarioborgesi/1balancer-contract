@@ -36,6 +36,7 @@ import {IERC20Token} from "./interfaces/IERC20Token.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {PriceConverter} from "./PriceConverter.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {console2} from "forge-std/console2.sol";
 
 contract Balancer is Ownable, ReentrancyGuard {
     /*
@@ -53,10 +54,12 @@ contract Balancer is Ownable, ReentrancyGuard {
     error Balancer__InvalidPortfolio();
     error Balancer__InvalidRebalanceThreshold(uint256 rebalanceThreshold);
     error Balancer__InvalidMaxSupportedTokens(uint256 maxSupportedTokens);
-
+    error Balancer__UpkeepNotNeeded();
+    error Balancer__UserNotAdded(address user);
     /**
      * Libraries
      */
+
     using SafeERC20 for IERC20Token;
     using PriceConverter for uint256;
     using EnumerableSet for EnumerableSet.AddressSet;
@@ -82,6 +85,8 @@ contract Balancer is Ownable, ReentrancyGuard {
     address private immutable i_wethToken;
     address private immutable i_usdcToken;
     uint256 private immutable i_rebalanceThreshold;
+    uint256 private immutable i_rebalanceInterval; // Rebalancing interval in seconds
+    uint256 private s_lastTimeStamp;
 
     IUniswapV2Router02 private immutable i_router;
 
@@ -113,17 +118,19 @@ contract Balancer is Ownable, ReentrancyGuard {
     event PortfolioUpdated(address indexed user, UserPortfolio portfolio);
     event UserAdded(address indexed user);
     event UserRemoved(address indexed user);
-
+    event UpkeepPerformed(uint256 blockTimestamp);
     /**
      * Constructor
      */
+
     constructor(
         address wethToken,
         address usdcToken,
         address router,
         address priceFeed,
         uint256 rebalanceThreshold,
-        uint8 maxSupportedTokens
+        uint8 maxSupportedTokens,
+        uint256 rebalanceInterval
     ) Ownable(msg.sender) {
         i_wethToken = wethToken;
         i_usdcToken = usdcToken;
@@ -140,11 +147,37 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
         i_rebalanceThreshold = rebalanceThreshold;
         s_maxSupportedTokens = maxSupportedTokens;
+        s_lastTimeStamp = block.timestamp;
+        i_rebalanceInterval = rebalanceInterval;
     }
 
     /**
      * External functions
      */
+
+    /**
+     * @dev Chainlink Automation calls this to perform the upkeep
+     *
+     */
+    function performUpkeep(bytes calldata /*performData*/ ) external {
+        (bool upkeepNeeded,) = checkUpkeep("");
+        if (!upkeepNeeded) {
+            revert Balancer__UpkeepNotNeeded();
+        }
+
+        s_lastTimeStamp = block.timestamp;
+
+        for (uint256 i = 0; i < s_users.length(); i++) {
+            address user = s_users.at(i);
+
+            if (_needsRebalancing(user)) {
+                _rebalanceUserPortfolio(user);
+            }
+        }
+
+        emit UpkeepPerformed(block.timestamp);
+    }
+
     /**
      * @notice Sets or updates the caller's target allocation preferences for their portfolio
      * @dev Must be called before making any deposits. Can be updated at any time.
@@ -205,6 +238,8 @@ contract Balancer is Ownable, ReentrancyGuard {
         s_userToAllocationPreference[msg.sender] = allocationPreference;
 
         emit AllocationSet(msg.sender, allocationPreference);
+
+        _addUser(msg.sender);
     }
 
     /**
@@ -251,6 +286,9 @@ contract Balancer is Ownable, ReentrancyGuard {
         if (s_userToAllocationPreference[msg.sender].allocations.length == 0) {
             revert Balancer__AllocationNotSet();
         }
+        if (!s_users.contains(msg.sender)) {
+            revert Balancer__UserNotAdded(msg.sender);
+        }
         if (!s_tokenToAllowed[inputToken]) {
             revert Balancer__TokenNotSupported(inputToken);
         }
@@ -275,9 +313,6 @@ contract Balancer is Ownable, ReentrancyGuard {
 
         // Add deposited tokens to portfolio
         _addToPortfolio(msg.sender, inputToken, amount);
-
-        // Add user to tracking set
-        _addUser(msg.sender);
 
         // Rebalance portfolio to match target allocation
         _rebalanceUserPortfolio(msg.sender);
@@ -310,13 +345,146 @@ contract Balancer is Ownable, ReentrancyGuard {
         IERC20Token(token).safeDecreaseAllowance(address(i_router), type(uint256).max);
         emit InvestmentTokenRemoved(token);
     }
+
+    function needsRebalancing() external view returns (bool) {
+        return _needsRebalancing(msg.sender);
+    }
+
     /**
      * public
      */
 
     /**
+     * @notice Checks if any user's portfolio needs rebalancing
+     * @dev Part of Chainlink Automation interface - called by Chainlink nodes
+     * @dev Loops through all users and checks if any need rebalancing
+     * @dev Returns true on first user found that needs rebalancing (gas efficient)
+     *
+     *
+     * @return upkeepNeeded True if at least one user needs rebalancing, false otherwise
+     * @return performData Additional data to pass to performUpkeep (not used currently)
+     *
+     * @custom:chainlink This function is called off-chain by Chainlink nodes
+     */
+    function checkUpkeep(bytes memory /* checkData */ )
+        public
+        view
+        returns (bool upkeepNeeded, bytes memory /* performData */ )
+    {
+        bool timeHasPassed = ((block.timestamp - s_lastTimeStamp) >= i_rebalanceInterval);
+
+        console2.log("Time has passed:", timeHasPassed);
+        console2.log("Block timestamp:", block.timestamp);
+        console2.log("Last time stamp:", s_lastTimeStamp);
+        console2.log("Rebalance interval:", i_rebalanceInterval);
+
+        if (!timeHasPassed) {
+            return (false, "");
+        }
+
+        bool hasUsersToRebalance = false;
+        for (uint256 i = 0; i < s_users.length(); i++) {
+            address user = s_users.at(i);
+            console2.log("User:", user);
+            if (_needsRebalancing(user)) {
+                hasUsersToRebalance = true;
+                break;
+            }
+        }
+        return (hasUsersToRebalance, "");
+    }
+
+    /**
      * internal
      */
+
+    /**
+     * @notice Rebalances a user's portfolio to match their target allocation
+     * @dev Swaps tokens to bring allocations within the rebalance threshold
+     * @dev Only supports two-token portfolios (WETH and USDC) currently
+     * @param user The address of the user whose portfolio should be rebalanced
+     *
+     * Requirements:
+     * - User must have set an allocation preference
+     * - User must have a valid portfolio with matching token/balance arrays
+     * - Portfolio must contain exactly 2 tokens (WETH and USDC)
+     * - Tokens must have sufficient balance for swaps
+     * - Router must have approval to spend tokens
+     *
+     * Emits:
+     * - {Swap} event for each token swap performed
+     * - {PortfolioUpdated} event only if rebalancing occurred
+     *
+     * @custom:security This function assumes the router has unlimited approval
+     * @custom:limitation Only works with WETH/USDC pairs currently
+     */
+
+    /**
+     * @notice Checks if a user's portfolio allocation has drifted beyond the rebalance threshold
+     * @dev Compares current token allocations (as % of total portfolio value) against target allocations
+     * @dev Returns true if ANY token's allocation drift exceeds the threshold percentage
+     *
+     * @param user The address of the user whose portfolio to check
+     * @return needsRebalance True if rebalancing is needed, false otherwise
+     *
+     * Calculation Logic:
+     * 1. Converts all token balances to USD value (18 decimals)
+     * 2. Calculates total portfolio value
+     * 3. For each token, calculates current allocation % = (tokenValue / totalValue) * 1e18
+     * 4. Compares current % vs target % - if difference > threshold, needs rebalancing
+     *
+     * Example:
+     * - Total portfolio: $6000 (3000 WETH + 3000 USDC)
+     * - Target: 50% WETH, 50% USDC
+     * - Current: 80% WETH ($4800), 20% USDC ($1200)
+     * - Drift: 30% for both tokens
+     * - If threshold is 5% (5e16), returns true
+     *
+     * @custom:security Uses Chainlink price feed for WETH valuation
+     * @custom:assumption Assumes USDC is pegged 1:1 with USD
+     */
+    function _needsRebalancing(address user) internal view returns (bool) {
+        UserPortfolio memory portfolio = s_userToPortfolio[user];
+        AllocationPreference memory allocationPreference = s_userToAllocationPreference[user];
+
+        address[] memory tokens = portfolio.tokens;
+        uint256[] memory balances = portfolio.balances;
+
+        if (allocationPreference.allocations.length == 0) {
+            revert Balancer__AllocationNotSet();
+        }
+
+        if (tokens.length == 0) {
+            revert Balancer__InvalidPortfolio();
+        }
+
+        // Calculate token values and total portfolio value
+        (uint256[] memory tokenValuesUsd, uint256 totalValueUsd) =
+            _calculatePortfolioValue(portfolio.tokens, portfolio.balances);
+
+        if (totalValueUsd == 0) {
+            return false;
+        }
+
+        // Check if any token's allocation has drifted beyond threshold
+        for (uint256 i = 0; i < portfolio.tokens.length; i++) {
+            // Calculate current allocation as percentage (with 18 decimals)
+            uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
+            uint256 targetAllocation = allocationPreference.allocations[i];
+
+            // Calculate absolute drift
+            uint256 drift = currentAllocation > targetAllocation
+                ? currentAllocation - targetAllocation
+                : targetAllocation - currentAllocation;
+
+            // Return immediately if any token exceeds threshold
+            if (drift > i_rebalanceThreshold) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /**
      * @notice Rebalances a user's portfolio to match their target allocation
@@ -548,10 +716,6 @@ contract Balancer is Ownable, ReentrancyGuard {
     }
 
     /**
-     * View and pure functions
-     */
-
-    /**
      * @dev Finds the index of a token in the tokens array
      * @param tokens Array of token addresses
      * @param token Token to find
@@ -611,77 +775,9 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
     }
 
-    function needsRebalancing() external view returns (bool) {
-        return _needsRebalancing(msg.sender);
-    }
-
     /**
-     * @notice Checks if a user's portfolio allocation has drifted beyond the rebalance threshold
-     * @dev Compares current token allocations (as % of total portfolio value) against target allocations
-     * @dev Returns true if ANY token's allocation drift exceeds the threshold percentage
-     *
-     * @param user The address of the user whose portfolio to check
-     * @return needsRebalance True if rebalancing is needed, false otherwise
-     *
-     * Calculation Logic:
-     * 1. Converts all token balances to USD value (18 decimals)
-     * 2. Calculates total portfolio value
-     * 3. For each token, calculates current allocation % = (tokenValue / totalValue) * 1e18
-     * 4. Compares current % vs target % - if difference > threshold, needs rebalancing
-     *
-     * Example:
-     * - Total portfolio: $6000 (3000 WETH + 3000 USDC)
-     * - Target: 50% WETH, 50% USDC
-     * - Current: 80% WETH ($4800), 20% USDC ($1200)
-     * - Drift: 30% for both tokens
-     * - If threshold is 5% (5e16), returns true
-     *
-     * @custom:security Uses Chainlink price feed for WETH valuation
-     * @custom:assumption Assumes USDC is pegged 1:1 with USD
+     * View and pure functions
      */
-    function _needsRebalancing(address user) internal view returns (bool) {
-        UserPortfolio memory portfolio = s_userToPortfolio[user];
-        AllocationPreference memory allocationPreference = s_userToAllocationPreference[user];
-
-        address[] memory tokens = portfolio.tokens;
-        uint256[] memory balances = portfolio.balances;
-
-        if (allocationPreference.allocations.length == 0) {
-            revert Balancer__AllocationNotSet();
-        }
-
-        if (tokens.length == 0) {
-            revert Balancer__InvalidPortfolio();
-        }
-
-        // Calculate token values and total portfolio value
-        (uint256[] memory tokenValuesUsd, uint256 totalValueUsd) =
-            _calculatePortfolioValue(portfolio.tokens, portfolio.balances);
-
-        if (totalValueUsd == 0) {
-            return false;
-        }
-
-        // Check if any token's allocation has drifted beyond threshold
-        for (uint256 i = 0; i < portfolio.tokens.length; i++) {
-            // Calculate current allocation as percentage (with 18 decimals)
-            uint256 currentAllocation = (tokenValuesUsd[i] * PERCENTAGE_FACTOR) / totalValueUsd;
-            uint256 targetAllocation = allocationPreference.allocations[i];
-
-            // Calculate absolute drift
-            uint256 drift = currentAllocation > targetAllocation
-                ? currentAllocation - targetAllocation
-                : targetAllocation - currentAllocation;
-
-            // Return immediately if any token exceeds threshold
-            if (drift > i_rebalanceThreshold) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     function getPercentageFactor() external pure returns (uint256) {
         return PERCENTAGE_FACTOR;
     }

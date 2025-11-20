@@ -38,7 +38,13 @@ contract BalancerHarnessTest is Test {
 
         vm.startPrank(owner);
         harness = new BalancerHarness(
-            config.weth, config.usdc, config.router, config.priceFeed, REBALANCE_THRESHOLD, MAX_SUPPORTED_TOKENS
+            config.weth,
+            config.usdc,
+            config.router,
+            config.priceFeed,
+            REBALANCE_THRESHOLD,
+            MAX_SUPPORTED_TOKENS,
+            config.interval
         );
         harness.addAllowedToken(address(weth));
         harness.addAllowedToken(address(usdc));
@@ -159,5 +165,53 @@ contract BalancerHarnessTest is Test {
         vm.stopPrank();
 
         assertFalse(needsRebalancing); // Should NOT need rebalancing
+    }
+
+    /*////////////////////////////////////////////////////////////// 
+                            CHECK UPKEEP
+    //////////////////////////////////////////////////////////////*/
+
+    function testCheckUpkeepReturnsFalseIfTimeHasNotPassed() public {
+        vm.warp(block.timestamp + config.interval - 1); // Creates the Block time
+        vm.roll(block.number + 1); // Creates the block number
+
+        (bool upkeepNeeded,) = harness.checkUpkeep("");
+
+        assert(!upkeepNeeded);
+    }
+
+    function testCheckUpkeepReturnsTrueIfTimeHasPassedAndUserPortfolioNeedsRebalancing() public {
+        vm.warp(block.timestamp + config.interval + 1); // Creates the Block time
+        vm.roll(block.number + 1); // Creates the block number
+
+        // Creating AllocationPreference
+        address[] memory investmentTokens = new address[](2);
+        investmentTokens[0] = address(weth);
+        investmentTokens[1] = address(usdc);
+
+        uint256[] memory allocations = new uint256[](2);
+        allocations[0] = 5 * 10 ** 17; // 50%
+        allocations[1] = 5 * 10 ** 17; // 50%
+
+        Balancer.AllocationPreference memory allocationPreference =
+            Balancer.AllocationPreference(investmentTokens, allocations);
+
+        // Creating User Portfolio
+        address[] memory tokens = new address[](2);
+        tokens[0] = address(weth);
+        tokens[1] = address(usdc);
+
+        uint256[] memory balances = new uint256[](2);
+        balances[0] = 100000000000000 wei; // equivalent to 0.0001 WETH approximately 0.3 USD so less then 1% of the portfolio value
+        balances[1] = 1000 * 1e6; // 1000 USDC so more then 99% of the portfolio value
+
+        vm.startPrank(USER);
+        harness.setUserAllocation(allocationPreference);
+        harness.setTestPortfolio(USER, tokens, balances);
+        vm.stopPrank();
+
+        (bool upkeepNeeded,) = harness.checkUpkeep("");
+
+        assertTrue(upkeepNeeded);
     }
 }
