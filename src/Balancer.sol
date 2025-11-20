@@ -157,8 +157,28 @@ contract Balancer is Ownable, ReentrancyGuard {
      */
 
     /**
-     * @dev Chainlink Automation calls this to perform the upkeep
-     *
+     * @notice Executes portfolio rebalancing for all users that need it
+     * @dev Part of Chainlink Automation interface - called by Chainlink nodes when upkeep is needed
+     * @dev Only executes if checkUpkeep returns true (time passed + users need rebalancing)
+     * @dev Loops through all registered users and rebalances portfolios that exceed threshold
+     * @dev performData parameter is not used in current implementation
+     * 
+     * Requirements:
+     * - checkUpkeep must return true
+     * - Sufficient time must have passed since last upkeep (i_rebalanceInterval)
+     * - At least one user must need rebalancing
+     * 
+     * Effects:
+     * - Updates s_lastTimeStamp to current block timestamp
+     * - Rebalances all portfolios that need it via _rebalanceUserPortfolio
+     * 
+     * Emits:
+     * - {UpkeepPerformed} event with current timestamp
+     * - {Swap} events for each rebalancing swap (from _rebalanceUserPortfolio)
+     * - {PortfolioUpdated} events for each rebalanced portfolio
+     * 
+     * @custom:chainlink Called by Chainlink Automation network
+     * @custom:security Reverts if upkeep is not needed (prevents unauthorized calls)
      */
     function performUpkeep(bytes calldata /*performData*/ ) external {
         (bool upkeepNeeded,) = checkUpkeep("");
@@ -238,9 +258,10 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
         s_userToAllocationPreference[msg.sender] = allocationPreference;
 
-        emit AllocationSet(msg.sender, allocationPreference);
-
         _addUser(msg.sender);
+
+        emit AllocationSet(msg.sender, allocationPreference);
+        
     }
 
     /**
@@ -319,6 +340,33 @@ contract Balancer is Ownable, ReentrancyGuard {
         _rebalanceUserPortfolio(msg.sender);
     }
 
+    /**
+     * @notice Withdraws all tokens from the caller's portfolio and transfers them back to the caller
+     * @dev Follows CEI pattern: validates, deletes storage, then transfers tokens
+     * @dev Removes user from tracking but keeps their allocation preference for future deposits
+     * 
+     * Requirements:
+     * - Caller must be a registered user
+     * - Portfolio must have at least one token with non-zero balance
+     * 
+     * Process:
+     * 1. Validates user is registered and has a valid portfolio
+     * 2. Checks that at least one token has a non-zero balance
+     * 3. Deletes portfolio from storage and removes user from tracking
+     * 4. Transfers all token balances to the caller
+     * 
+     * Effects:
+     * - All token balances transferred to caller
+     * - Portfolio completely deleted from storage
+     * - User removed from s_users tracking set
+     * - Allocation preference remains (can deposit again with same allocation)
+     * 
+     * Emits:
+     * - {Withdrawal} event with user address
+     * 
+     * @custom:security Uses nonReentrant modifier and follows CEI pattern
+     * @custom:note User's allocation preference is NOT deleted
+     */
     function withdraw() external nonReentrant {
         if (!s_users.contains(msg.sender)) {
             revert Balancer__UserNotAdded(msg.sender);
@@ -356,14 +404,54 @@ contract Balancer is Ownable, ReentrancyGuard {
         emit Withdrawal(msg.sender);
     }
 
+    /**
+     * @notice Manually adds the caller to the users tracking set
+     * @dev Users are automatically added when setting allocation or making deposits
+     * @dev This function allows manual addition if needed for any reason
+     * 
+     * Effects:
+     * - Adds caller to s_users EnumerableSet
+     * - Does nothing if user is already in the set
+     * 
+     * Emits:
+     * - {UserAdded} event if user was not already in the set
+     */
     function addUser() external {
         _addUser(msg.sender);
     }
 
+    /**
+     * @notice Manually removes the caller from the users tracking set
+     * @dev Does not affect portfolio or allocation preference
+     * @dev User can still deposit/withdraw even after removal
+     * 
+     * Effects:
+     * - Removes caller from s_users EnumerableSet
+     * - Does nothing if user is not in the set
+     * 
+     * Emits:
+     * - {UserRemoved} event if user was in the set
+     */
     function removeUser() external {
         _removeUser(msg.sender);
     }
 
+    /**
+     * @notice Sets the maximum number of tokens supported per user allocation
+     * @dev Only callable by contract owner
+     * @dev Currently restricted to exactly 2 tokens (WETH and USDC)
+     * 
+     * @param maxSupportedTokens The new maximum (must be 2)
+     * 
+     * Requirements:
+     * - Caller must be contract owner
+     * - maxSupportedTokens must equal 2
+     * 
+     * Effects:
+     * - Updates s_maxSupportedTokens
+     * 
+     * @custom:limitation Currently hardcoded to only accept 2 tokens
+     */
     function setMaxSupportedTokens(uint8 maxSupportedTokens) external onlyOwner {
         if (maxSupportedTokens != 2) {
             revert Balancer__InvalidMaxSupportedTokens(maxSupportedTokens);
@@ -371,6 +459,26 @@ contract Balancer is Ownable, ReentrancyGuard {
         s_maxSupportedTokens = maxSupportedTokens;
     }
 
+    /**
+     * @notice Adds a token to the list of allowed investment tokens
+     * @dev Only callable by contract owner
+     * @dev Automatically approves the Uniswap router to spend this token (unlimited approval)
+     * 
+     * @param token The ERC20 token address to allow
+     * 
+     * Requirements:
+     * - Caller must be contract owner
+     * - Token must be a valid ERC20 contract
+     * 
+     * Effects:
+     * - Sets s_tokenToAllowed[token] to true
+     * - Approves router to spend unlimited amount of this token
+     * 
+     * Emits:
+     * - {InvestmentTokenAdded} event with token address
+     * 
+     * @custom:security Unlimited approval given to router - ensure router is trusted
+     */
     function addAllowedToken(address token) external onlyOwner {
         s_tokenToAllowed[token] = true;
         IERC20Token(token).safeIncreaseAllowance(address(i_router), type(uint256).max);
@@ -378,12 +486,44 @@ contract Balancer is Ownable, ReentrancyGuard {
         emit InvestmentTokenAdded(token);
     }
 
+    /**
+     * @notice Removes a token from the list of allowed investment tokens
+     * @dev Only callable by contract owner
+     * @dev Removes the router's approval to spend this token
+     * 
+     * @param token The ERC20 token address to disallow
+     * 
+     * Requirements:
+     * - Caller must be contract owner
+     * 
+     * Effects:
+     * - Sets s_tokenToAllowed[token] to false
+     * - Removes router's approval to spend this token
+     * 
+     * Emits:
+     * - {InvestmentTokenRemoved} event with token address
+     * 
+     * @custom:warning Existing user portfolios with this token will not be affected
+     */
     function removeAllowedToken(address token) external onlyOwner {
         s_tokenToAllowed[token] = false;
         IERC20Token(token).safeDecreaseAllowance(address(i_router), type(uint256).max);
         emit InvestmentTokenRemoved(token);
     }
 
+    /**
+     * @notice Checks if the caller's portfolio needs rebalancing
+     * @dev Wrapper around _needsRebalancing for external access
+     * @dev Compares current allocation against target allocation and threshold
+     * 
+     * @return True if the caller's portfolio drift exceeds the rebalance threshold, false otherwise
+     * 
+     * Example Usage:
+     * - User can call this before manually triggering a rebalance
+     * - Frontend can display rebalancing status to users
+     * 
+     * @custom:view This is a view function and does not modify state
+     */
     function needsRebalancing() external view returns (bool) {
         return _needsRebalancing(msg.sender);
     }
@@ -434,27 +574,6 @@ contract Balancer is Ownable, ReentrancyGuard {
 
     /**
      * internal
-     */
-
-    /**
-     * @notice Rebalances a user's portfolio to match their target allocation
-     * @dev Swaps tokens to bring allocations within the rebalance threshold
-     * @dev Only supports two-token portfolios (WETH and USDC) currently
-     * @param user The address of the user whose portfolio should be rebalanced
-     *
-     * Requirements:
-     * - User must have set an allocation preference
-     * - User must have a valid portfolio with matching token/balance arrays
-     * - Portfolio must contain exactly 2 tokens (WETH and USDC)
-     * - Tokens must have sufficient balance for swaps
-     * - Router must have approval to spend tokens
-     *
-     * Emits:
-     * - {Swap} event for each token swap performed
-     * - {PortfolioUpdated} event only if rebalancing occurred
-     *
-     * @custom:security This function assumes the router has unlimited approval
-     * @custom:limitation Only works with WETH/USDC pairs currently
      */
 
     /**
@@ -620,6 +739,18 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
     }
 
+    /**
+     * @dev Internal function to add a user to the users tracking set
+     * @dev Does nothing if user is already in the set (idempotent)
+     * 
+     * @param _address The address to add
+     * 
+     * Effects:
+     * - Adds address to s_users EnumerableSet if not already present
+     * 
+     * Emits:
+     * - {UserAdded} event only if user was not already in the set
+     */
     function _addUser(address _address) private {
         if (s_users.contains(_address)) {
             return;
@@ -628,6 +759,20 @@ contract Balancer is Ownable, ReentrancyGuard {
         emit UserAdded(_address);
     }
 
+    /**
+     * @dev Internal function to remove a user from the users tracking set
+     * @dev Does nothing if user is not in the set (idempotent)
+     * 
+     * @param _address The address to remove
+     * 
+     * Effects:
+     * - Removes address from s_users EnumerableSet if present
+     * 
+     * Emits:
+     * - {UserRemoved} event only if user was in the set
+     * 
+     * @custom:note Does not affect user's portfolio or allocation preference
+     */
     function _removeUser(address _address) private {
         if (!s_users.contains(_address)) {
             return;
@@ -798,7 +943,20 @@ contract Balancer is Ownable, ReentrancyGuard {
         }
     }
 
-    // Helper function to find token indices
+    /**
+     * @dev Finds the indices of WETH and USDC tokens in a portfolio
+     * @dev Reverts if either token is not found
+     * 
+     * @param tokens Array of token addresses from portfolio
+     * @param user The user address (used for error messages)
+     * @return wethIndex The index of WETH in the tokens array
+     * @return usdcIndex The index of USDC in the tokens array
+     * 
+     * Requirements:
+     * - Both i_wethToken and i_usdcToken must be present in the tokens array
+     * 
+     * @custom:revert Balancer__InvalidPortfolio if either token is not found
+     */
     function _findTokenIndices(address[] memory tokens, address user) private view returns (uint256 wethIndex, uint256 usdcIndex) {
         wethIndex = type(uint256).max;
         usdcIndex = type(uint256).max;
@@ -816,42 +974,92 @@ contract Balancer is Ownable, ReentrancyGuard {
     /**
      * View and pure functions
      */
+    
+    /**
+     * @notice Returns the percentage factor used for allocation calculations
+     * @dev This constant represents 100% = 1e18
+     * @return The percentage factor (1e18)
+     */
     function getPercentageFactor() external pure returns (uint256) {
         return PERCENTAGE_FACTOR;
     }
 
+    /**
+     * @notice Checks if a token is in the allowed investment tokens list
+     * @param token The token address to check
+     * @return True if the token is allowed, false otherwise
+     */
     function getTokenToAllowed(address token) external view returns (bool) {
         return s_tokenToAllowed[token];
     }
 
+    /**
+     * @notice Returns the maximum number of tokens supported per user allocation
+     * @return The maximum supported tokens (currently 2)
+     */
     function getMaxSupportedTokens() external view returns (uint8) {
         return s_maxSupportedTokens;
     }
 
+    /**
+     * @notice Returns the Uniswap V2 Router address used for token swaps
+     * @return The router contract address
+     */
     function getRouterAddress() external view returns (address) {
         return address(i_router);
     }
 
+    /**
+     * @notice Returns the WETH token address
+     * @return The WETH token contract address
+     */
     function getWethTokenAddress() external view returns (address) {
         return i_wethToken;
     }
 
+    /**
+     * @notice Returns a user's target allocation preference
+     * @param user The user address to query
+     * @return AllocationPreference struct containing investment tokens and their target allocations
+     */
     function getUserToAllocationPreference(address user) external view returns (AllocationPreference memory) {
         return s_userToAllocationPreference[user];
     }
 
+    /**
+     * @notice Returns a user's current portfolio holdings
+     * @param user The user address to query
+     * @return UserPortfolio struct containing token addresses and balances
+     */
     function getUserToPortfolio(address user) external view returns (UserPortfolio memory) {
         return s_userToPortfolio[user];
     }
 
+    /**
+     * @notice Returns the user address at a specific index in the users set
+     * @dev Useful for iterating through all users off-chain
+     * @param index The index in the users EnumerableSet (0-based)
+     * @return The user address at that index
+     * @custom:revert Will revert if index is out of bounds
+     */
     function getUserAtIndex(uint256 index) external view returns (address) {
         return s_users.at(index);
     }
 
+    /**
+     * @notice Checks if an address is registered as a user
+     * @param _address The address to check
+     * @return True if the address is in the users tracking set, false otherwise
+     */
     function isUser(address _address) external view returns (bool) {
         return s_users.contains(_address);
     }
 
+    /**
+     * @notice Returns the total number of registered users
+     * @dev This is the size of the s_users EnumerableSet
+     * @return The number of users currently tracked by the contract
+     */
     function getUsersLength() external view returns (uint256) {
         return s_users.length();
     }
